@@ -1,0 +1,7 @@
+<Solution>
+  <Configurations>
+    <Platform Name="x64" />
+    <Platform Name="x86" />
+  </Configurations>
+  <Project Path="ServerGP/ServerGP.vcxproj" Id="c366149d-5579-4340-8245-98e7ee323dc0" />
+</Solution>
