@@ -1,12 +1,5 @@
 #include <windows.h>
-#include <vector>
-#include <string>
 #include <chrono>
-
-// Naming Conventions from GEMINI.md:
-// Types: PascalCase
-// Functions: snake_case
-// Member Variables: _camelCase
 
 struct Position {
     int x;
@@ -14,17 +7,15 @@ struct Position {
 };
 
 // Global state
-Position _playerPos = { 0, 0 };
-const int BOARD_SIZE = 8;
-bool _isRunning = true;
+Position playerPos = { 0, 0 };
+constexpr int BOARD_SIZE = 8;
+bool isRunning = true;
 
 // Timing
-std::chrono::steady_clock::time_point _lastTime;
+std::chrono::steady_clock::time_point lastTime;
 
 void update(float deltaTime) {
-    // Game logic update (e.g., animations, server reconciliation)
-    // Currently, movement is handled via WM_KEYDOWN for simplicity, 
-    // but we could move it here for smoother input polling.
+    // 지금은 비워둠
 }
 
 void render(HWND hWnd) {
@@ -76,10 +67,10 @@ void render(HWND hWnd) {
     int padY = cellHeight * 15 / 100;
 
     Ellipse(memDC, 
-        _playerPos.x * cellWidth + padX, 
-        _playerPos.y * cellHeight + padY, 
-        (_playerPos.x + 1) * cellWidth - padX, 
-        (_playerPos.y + 1) * cellHeight - padY);
+        playerPos.x * cellWidth + padX, 
+        playerPos.y * cellHeight + padY, 
+        (playerPos.x + 1) * cellWidth - padX, 
+        (playerPos.y + 1) * cellHeight - padY);
 
     SelectObject(memDC, hOldBrush);
     DeleteObject(hRedBrush);
@@ -109,17 +100,17 @@ LRESULT CALLBACK window_proc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lPar
 
     case WM_KEYDOWN: {
         switch (wParam) {
-        case VK_UP:    if (_playerPos.y > 0) _playerPos.y--; break;
-        case VK_DOWN:  if (_playerPos.y < BOARD_SIZE - 1) _playerPos.y++; break;
-        case VK_LEFT:  if (_playerPos.x > 0) _playerPos.x--; break;
-        case VK_RIGHT: if (_playerPos.x < BOARD_SIZE - 1) _playerPos.x++; break;
-        case VK_ESCAPE: _isRunning = false; break;
+        case VK_UP:    if (playerPos.y > 0) playerPos.y--; break;
+        case VK_DOWN:  if (playerPos.y < BOARD_SIZE - 1) playerPos.y++; break;
+        case VK_LEFT:  if (playerPos.x > 0) playerPos.x--; break;
+        case VK_RIGHT: if (playerPos.x < BOARD_SIZE - 1) playerPos.x++; break;
+        case VK_ESCAPE: isRunning = false; break;
         }
     }
     break;
 
     case WM_DESTROY:
-        _isRunning = false;
+        isRunning = false;
         PostQuitMessage(0);
         break;
 
@@ -143,7 +134,7 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, _
     RegisterClass(&wc);
 
     HWND hWnd = CreateWindowEx(
-        0, CLASS_NAME, L"Server Test Client - Game Loop Pattern",
+        0, CLASS_NAME, L"Server Test Client - PKJ",
         WS_OVERLAPPEDWINDOW,
         CW_USEDEFAULT, CW_USEDEFAULT, 600, 600,
         NULL, NULL, hInstance, NULL
@@ -153,11 +144,11 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, _
 
     ShowWindow(hWnd, nShowCmd);
 
-    _lastTime = std::chrono::steady_clock::now();
+    lastTime = std::chrono::steady_clock::now();
 
     // --- GAME LOOP ---
     MSG msg = {};
-    while (_isRunning) {
+    while (isRunning) {
         if (PeekMessage(&msg, NULL, 0, 0, PM_REMOVE)) {
             if (msg.message == WM_QUIT) break;
             TranslateMessage(&msg);
@@ -165,8 +156,8 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, _
         } else {
             // Calculate Delta Time
             auto currentTime = std::chrono::steady_clock::now();
-            float deltaTime = std::chrono::duration<float>(currentTime - _lastTime).count();
-            _lastTime = currentTime;
+            float deltaTime = std::chrono::duration<float>(currentTime - lastTime).count();
+            lastTime = currentTime;
 
             update(deltaTime);
             render(hWnd);
