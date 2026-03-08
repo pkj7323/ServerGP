@@ -26,6 +26,11 @@ int main()
 	std::cout << "Time " << std::chrono::duration_cast<std::chrono::milliseconds>(dur).count();
 	std::cout << " ms " << h_C[0] << std::endl;
 
+	for (unsigned int i = 0; i < N * N; ++i) {
+		h_A[i] = 1;
+		h_B[i] = 1;
+		h_C[i] = 0;
+	}
 	auto start2 = std::chrono::high_resolution_clock::now();
 	for (unsigned int y = 0; y < N; ++y)
 		for (unsigned int x = 0; x < N; x++)
