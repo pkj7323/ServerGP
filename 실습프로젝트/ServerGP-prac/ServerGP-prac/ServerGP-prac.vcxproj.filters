@@ -24,5 +24,8 @@
     <ClCompile Include="echo server.cpp">
       <Filter>소스 파일</Filter>
     </ClCompile>
+    <ClCompile Include="EchoClient.cpp">
+      <Filter>소스 파일</Filter>
+    </ClCompile>
   </ItemGroup>
 </Project>

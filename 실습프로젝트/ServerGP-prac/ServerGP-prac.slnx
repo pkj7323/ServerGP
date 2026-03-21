@@ -3,5 +3,5 @@
     <Platform Name="x64" />
     <Platform Name="x86" />
   </Configurations>
-  <Project Path="ServerGP-prac/ServerGP-prac.vcxproj" />
+  <Project Path="ServerGP-prac/ServerGP-prac.vcxproj" Id="aa758efd-e47a-4e02-ac60-5c1039af528a" />
 </Solution>

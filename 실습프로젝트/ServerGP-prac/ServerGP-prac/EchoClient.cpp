@@ -1,4 +1,4 @@
-﻿#include <iostream>
+#include <iostream>
 #include <ws2tcpip.h>
 #include <string>
 #pragma comment(lib, "ws2_32.lib")
@@ -36,7 +36,7 @@ int main()
 	server_addr.sin_port = htons(SERVER_PORT);
 	inet_pton(AF_INET, SERVER_IP, &server_addr.sin_addr);
 
-	int ret = WSAConnect(s_socket, reinterpret_cast<sockaddr*>(&server_addr), 
+	int ret = WSAConnect(s_socket, reinterpret_cast<sockaddr*>(&server_addr),
 		sizeof(server_addr), nullptr, nullptr, nullptr, nullptr);
 	if (SOCKET_ERROR == ret)
 	{
@@ -55,7 +55,7 @@ int main()
 			error_display(L"WSASend Error", WSAGetLastError());
 		}
 		char recv_buffer[BUFFER_SIZE];
-		WSABUF recv_BUF{BUFFER_SIZE, recv_buffer};
+		WSABUF recv_BUF{ BUFFER_SIZE, recv_buffer };
 		DWORD recv_size = 0;
 		DWORD recv_flag = 0;
 		ret = WSARecv(s_socket, &recv_BUF, 1, &recv_size, &recv_flag, nullptr, nullptr);
