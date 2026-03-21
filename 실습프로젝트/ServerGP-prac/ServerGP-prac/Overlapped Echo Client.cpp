@@ -7,6 +7,11 @@ constexpr char SERVER_IP[] = "127.0.0.1";
 constexpr short SERVER_PORT = 3000;
 constexpr int BUFFER_SIZE = 4096;
 char g_recv_buffer[BUFFER_SIZE];
+char g_send_buffer[BUFFER_SIZE];
+WSABUF g_send_buf{ BUFFER_SIZE, g_send_buffer };
+WSABUF g_recv_buf{ BUFFER_SIZE, g_recv_buffer };
+WSAOVERLAPPED g_send_overlapped{};
+WSAOVERLAPPED g_recv_overlapped{};
 SOCKET s_socket = INVALID_SOCKET;
 void error_display(const std::wstring& msg, int err_no)
 {
@@ -43,17 +48,32 @@ void CALLBACK send_callback(DWORD error, DWORD bytes_transferred, LPWSAOVERLAPPE
 		error_display(L"send_callback Error", WSAGetLastError());
 	}
 	std::cout << "Sent " << bytes_transferred <<" bytes to server" << std::endl;
+
+	DWORD recv_size = 0;
+	DWORD recv_flag = 0;
+	ZeroMemory(&g_recv_overlapped, sizeof(g_recv_overlapped));
+	int ret = WSARecv(s_socket, &g_recv_buf, 1, nullptr,
+		&recv_flag, &g_recv_overlapped, recv_callback);
+	if (SOCKET_ERROR == ret)
+	{
+		int err_no = WSAGetLastError();
+		if (err_no != WSA_IO_PENDING)
+		{
+			error_display(L"WSARecv Error", WSAGetLastError());
+		}
+	}
 }
 
 void SendToServer()
 {
-	char input[BUFFER_SIZE];
+	
 	std::cout << "Enter message to send ";
-	std::cin.getline(input, BUFFER_SIZE);
-	WSABUF wsa_buf{ static_cast<ULONG>(strlen(input)) + 1, input };
-	WSAOVERLAPPED overlapped{}; // 이 구조체는 비동기 작업이 끝날때까지 생존해야한다.
+	std::cin.getline(g_send_buffer, BUFFER_SIZE);
+
+	g_send_buf.len = static_cast<ULONG>(strlen(g_send_buffer)) + 1;
+	ZeroMemory(&g_send_overlapped, sizeof(g_send_overlapped));
 	DWORD sent_size = 0;
-	int ret = WSASend(s_socket, &wsa_buf, 1, &sent_size, 0, &overlapped, send_callback);
+	int ret = WSASend(s_socket, &g_send_buf, 1, &sent_size, 0, &g_send_overlapped, send_callback);
 	if (SOCKET_ERROR == ret)
 	{
 		error_display(L"WSASend Error", WSAGetLastError());
@@ -81,21 +101,6 @@ int main()
 	SendToServer();
 	for (;;)
 	{
-		
-		WSABUF recv_BUF{ BUFFER_SIZE, g_recv_buffer };
-		WSAOVERLAPPED recv_overlapped{};
-		DWORD recv_size = 0;
-		DWORD recv_flag = 0;
-		ret = WSARecv(s_socket, &recv_BUF, 1, nullptr, 
-			&recv_flag, &recv_overlapped, recv_callback);
-		if (SOCKET_ERROR == ret)
-		{
-			int err_no = WSAGetLastError();
-			if (err_no != WSA_IO_PENDING)
-			{
-				error_display(L"WSARecv Error", WSAGetLastError());
-			}
-		}
 		SleepEx(0, TRUE); // Overlapped I/O의 콜백이 실행될 시간을 주기 위해 잠시 대기
 	}
 	WSACleanup();
