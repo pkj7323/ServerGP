@@ -6,6 +6,28 @@
 #include <string>
 #include <iostream>
 
+#pragma pack(push, 1)
+struct CSMovePacket
+{
+	uint32_t	size;
+	int32_t		type;
+	struct vector2
+	{
+		int x;
+		int y;
+	} dir;
+};
+struct SCMovePacket
+{
+	uint32_t	size;
+	int32_t		type;
+	struct vector2
+	{
+		int x;
+		int y;
+	} pos;
+};
+#pragma pack(pop)
 void error_display(const std::wstring& msg, int err_no)
 {
 	WCHAR* lpMsgBuf;
@@ -29,28 +51,6 @@ struct Position {
 	int x;
 	int y;
 };
-#pragma pack(push, 1)
-struct CSMovePacket
-{
-	uint32_t	size;
-	int32_t		type;
-	struct vector2
-	{
-		int x;
-		int y;
-	} dir;
-};
-struct SCMovePacket
-{
-	uint32_t	size;
-	int32_t		type;
-	struct vector2
-	{
-		int x;
-		int y;
-	} pos;
-};
-#pragma pack(pop)
 // Global state
 Position playerPos = { 0, 0 };
 constexpr int BOARD_SIZE = 8;
@@ -59,24 +59,27 @@ SOCKET g_socket = INVALID_SOCKET;
 // Timing
 std::chrono::steady_clock::time_point lastTime;
 
-void update(float deltaTime) {
-	
-	char input[BUFFER_SIZE];
-	std::cout << "Enter message to send ";
-	std::cin.getline(input, BUFFER_SIZE);
-	WSABUF wsa_buf{ static_cast<ULONG>(strlen(input)) + 1, input };
-	DWORD sent_size = 0;
-	int ret = WSASend(s_socket, &wsa_buf, 1, &sent_size, 0, nullptr, nullptr);
+void send_move_packet(int dx, int dy) {
+	CSMovePacket packet{};
+	packet.size = sizeof(packet);
+	packet.type = 1; // Move Packet Type
+	packet.dir.x = dx;
+	packet.dir.y = dy;
+	WSABUF send_BUF{ sizeof(packet), reinterpret_cast<char*>(&packet) };
+	DWORD send_size = 0;
+	int ret = WSASend(g_socket, &send_BUF, 1, &send_size, 0, nullptr, nullptr);
 	if (SOCKET_ERROR == ret)
 	{
 		error_display(L"WSASend Error", WSAGetLastError());
 	}
+}
 
+void update(float deltaTime) {
 	char recv_buffer[BUFFER_SIZE];
 	WSABUF recv_BUF{ BUFFER_SIZE, recv_buffer };
 	DWORD recv_size = 0;
 	DWORD recv_flag = 0;
-	ret = WSARecv(g_socket, &recv_BUF, 1, &recv_size, &recv_flag, nullptr, nullptr);
+	int ret = WSARecv(g_socket, &recv_BUF, 1, &recv_size, &recv_flag, nullptr, nullptr);
 	if (SOCKET_ERROR == ret)
 	{
 		error_display(L"WSARecv Error", WSAGetLastError());
@@ -171,10 +174,15 @@ LRESULT CALLBACK window_proc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lPar
 
 	case WM_KEYDOWN: {
 		switch (wParam) {
-		case VK_UP:    if (playerPos.y > 0) playerPos.y--; break;
-		case VK_DOWN:  if (playerPos.y < BOARD_SIZE - 1) playerPos.y++; break;
-		case VK_LEFT:  if (playerPos.x > 0) playerPos.x--; break;
-		case VK_RIGHT: if (playerPos.x < BOARD_SIZE - 1) playerPos.x++; break;
+		case VK_UP: 
+		case VK_DOWN:  
+		case VK_LEFT:  
+		case VK_RIGHT:
+			send_move_packet(
+				(wParam == VK_LEFT) ? -1 : (wParam == VK_RIGHT) ? 1 : 0,
+				(wParam == VK_UP) ? -1 : (wParam == VK_DOWN) ? 1 : 0
+			);
+			break;
 		case VK_ESCAPE: isRunning = false; break;
 		}
 	}
