@@ -7,6 +7,7 @@ constexpr char SERVER_IP[] = "127.0.0.1";
 constexpr short SERVER_PORT = 3000;
 constexpr int BUFFER_SIZE = 4096;
 char g_recv_buffer[BUFFER_SIZE];
+SOCKET s_socket = INVALID_SOCKET;
 void error_display(const std::wstring& msg, int err_no)
 {
 	WCHAR* lpMsgBuf;
@@ -22,7 +23,7 @@ void error_display(const std::wstring& msg, int err_no)
 	// 디버깅 용
 	LocalFree(lpMsgBuf);
 }
-
+void SendToServer();
 void CALLBACK recv_callback(DWORD error, DWORD bytes_transferred, LPWSAOVERLAPPED overlapped, DWORD flags)
 {
 	if (error != 0)
@@ -31,6 +32,8 @@ void CALLBACK recv_callback(DWORD error, DWORD bytes_transferred, LPWSAOVERLAPPE
 	}
 	std::cout << "Received " << g_recv_buffer;
 	std::cout << ", Size: " << bytes_transferred << " bytes" << std::endl;
+
+	SendToServer();
 	
 }
 void CALLBACK send_callback(DWORD error, DWORD bytes_transferred, LPWSAOVERLAPPED overlapped, DWORD flags)
@@ -41,13 +44,28 @@ void CALLBACK send_callback(DWORD error, DWORD bytes_transferred, LPWSAOVERLAPPE
 	}
 	std::cout << "Sent " << bytes_transferred <<" bytes to server" << std::endl;
 }
+
+void SendToServer()
+{
+	char input[BUFFER_SIZE];
+	std::cout << "Enter message to send ";
+	std::cin.getline(input, BUFFER_SIZE);
+	WSABUF wsa_buf{ static_cast<ULONG>(strlen(input)) + 1, input };
+	WSAOVERLAPPED overlapped{}; // 이 구조체는 비동기 작업이 끝날때까지 생존해야한다.
+	DWORD sent_size = 0;
+	int ret = WSASend(s_socket, &wsa_buf, 1, &sent_size, 0, &overlapped, send_callback);
+	if (SOCKET_ERROR == ret)
+	{
+		error_display(L"WSASend Error", WSAGetLastError());
+	}
+}
 int main()
 {
 	std::wcout.imbue(std::locale("korean"));
 	WSADATA wsa_data{};
 	WSAStartup(MAKEWORD(2, 2), &wsa_data); //마이크로소프트 네트워크사용할거면 초기화하고 해라 - 빌게이츠 <- 야이 새끼야!
 
-	SOCKET s_socket = WSASocket(AF_INET, SOCK_STREAM, IPPROTO_TCP, nullptr, 0, WSA_FLAG_OVERLAPPED);
+	s_socket = WSASocket(AF_INET, SOCK_STREAM, IPPROTO_TCP, nullptr, 0, WSA_FLAG_OVERLAPPED);
 	SOCKADDR_IN server_addr{};
 	server_addr.sin_family = AF_INET;
 	server_addr.sin_port = htons(SERVER_PORT);
@@ -59,19 +77,11 @@ int main()
 	{
 		error_display(L"WSAConnect Error", WSAGetLastError());
 	}
+
+	SendToServer();
 	for (;;)
 	{
-		char input[BUFFER_SIZE];
-		std::cout << "Enter message to send ";
-		std::cin.getline(input, BUFFER_SIZE);
-		WSABUF wsa_buf{ static_cast<ULONG>(strlen(input)) + 1, input };
-		WSAOVERLAPPED overlapped{};
-		DWORD sent_size = 0;
-		int ret = WSASend(s_socket, &wsa_buf, 1, &sent_size, 0, &overlapped, send_callback);
-		if (SOCKET_ERROR == ret)
-		{
-			error_display(L"WSASend Error", WSAGetLastError());
-		}
+		
 		WSABUF recv_BUF{ BUFFER_SIZE, g_recv_buffer };
 		WSAOVERLAPPED recv_overlapped{};
 		DWORD recv_size = 0;
