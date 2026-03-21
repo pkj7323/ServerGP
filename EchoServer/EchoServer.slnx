@@ -3,5 +3,5 @@
     <Platform Name="x64" />
     <Platform Name="x86" />
   </Configurations>
-  <Project Path="EchoServer/EchoServer.vcxproj" />
+  <Project Path="EchoServer/EchoServer.vcxproj" Id="3546f4bb-15d3-4115-b843-53806b338cb4" />
 </Solution>

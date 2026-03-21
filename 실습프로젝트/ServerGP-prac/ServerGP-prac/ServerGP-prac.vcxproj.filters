@@ -21,10 +21,13 @@
     <ClCompile Include="matirix_multiply.cpp">
       <Filter>소스 파일</Filter>
     </ClCompile>
-    <ClCompile Include="echo server.cpp">
+    <ClCompile Include="EchoServer.cpp">
       <Filter>소스 파일</Filter>
     </ClCompile>
     <ClCompile Include="EchoClient.cpp">
+      <Filter>소스 파일</Filter>
+    </ClCompile>
+    <ClCompile Include="Overlapped Echo Client.cpp">
       <Filter>소스 파일</Filter>
     </ClCompile>
   </ItemGroup>
