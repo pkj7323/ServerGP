@@ -1,4 +1,4 @@
-#include <ws2tcpip.h>
+﻿#include <ws2tcpip.h>
 #include <windows.h>
 #pragma comment(lib, "ws2_32.lib")
 
@@ -227,9 +227,27 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, _
 	);
 
 
+	// 콘솔 할당 및 입출력 연결
+	AllocConsole();
+	FILE* fDummy;
+	freopen_s(&fDummy, "CONIN$", "r", stdin);
+	freopen_s(&fDummy, "CONOUT$", "w", stdout);
+	freopen_s(&fDummy, "CONOUT$", "w", stderr);
+
 	std::wcout.imbue(std::locale("korean"));
+	std::cout << "서버 IP 주소를 입력하세요 (기본: 127.0.0.1): ";
+	std::string input_ip;
+	std::getline(std::cin, input_ip);
+	if (!input_ip.empty()) {
+		SERVER_IP = input_ip;
+	}
+
 	WSADATA wsa_data{};
-	WSAStartup(MAKEWORD(2, 2), &wsa_data);
+	int ret= WSAStartup(MAKEWORD(2, 2), &wsa_data);
+	if (ret != 0)
+	{
+		error_display(L"WSAStartUpError", -1);
+	}
 
 	g_socket = WSASocket(AF_INET, SOCK_STREAM, IPPROTO_TCP, nullptr, 0, 0);
 	SOCKADDR_IN server_addr{};
@@ -238,7 +256,7 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, _
 	inet_pton(AF_INET, SERVER_IP.c_str(), &server_addr.sin_addr);
 
 
-	int ret = WSAConnect(g_socket, reinterpret_cast<sockaddr*>(&server_addr),
+	ret = WSAConnect(g_socket, reinterpret_cast<sockaddr*>(&server_addr),
 		sizeof(server_addr), nullptr, nullptr, nullptr, nullptr);
 	if (SOCKET_ERROR == ret)
 	{
