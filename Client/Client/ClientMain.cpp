@@ -74,6 +74,27 @@ void send_move_packet(int dx, int dy) {
 	}
 }
 
+static void recv_move_packet()
+{
+	char recv_buffer[BUFFER_SIZE];
+	WSABUF recv_BUF{ BUFFER_SIZE, recv_buffer };
+	DWORD recv_size = 0;
+	DWORD recv_flag = 0;
+	int ret = WSARecv(g_socket, &recv_BUF, 1, &recv_size, &recv_flag, nullptr, nullptr);
+	if (SOCKET_ERROR == ret)
+	{
+		error_display(L"WSARecv Error", WSAGetLastError());
+	}
+	SCMovePacket movePacket{};
+	memcpy(&movePacket, recv_buffer, sizeof(movePacket));
+	if (movePacket.size != sizeof(movePacket))
+	{
+		error_display(L"Invalid packet size", -1);
+	}
+	playerPos.x = static_cast<int>(movePacket.pos.x);
+	playerPos.y = static_cast<int>(movePacket.pos.y);
+}
+
 void update(float deltaTime) {
 	
 }
@@ -143,26 +164,7 @@ void render(HWND hWnd) {
 	DeleteDC(memDC);
 	ReleaseDC(hWnd, hdc);
 }
-void recv_move_packet()
-{
-	char recv_buffer[BUFFER_SIZE];
-	WSABUF recv_BUF{ BUFFER_SIZE, recv_buffer };
-	DWORD recv_size = 0;
-	DWORD recv_flag = 0;
-	int ret = WSARecv(g_socket, &recv_BUF, 1, &recv_size, &recv_flag, nullptr, nullptr);
-	if (SOCKET_ERROR == ret)
-	{
-		error_display(L"WSARecv Error", WSAGetLastError());
-	}
-	SCMovePacket movePacket{};
-	memcpy(&movePacket, recv_buffer, sizeof(movePacket));
-	if (movePacket.size != sizeof(movePacket))
-	{
-		error_display(L"Invalid packet size", -1);
-	}
-	playerPos.x = static_cast<int>(movePacket.pos.x);
-	playerPos.y = static_cast<int>(movePacket.pos.y);
-}
+
 LRESULT CALLBACK window_proc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) {
 	switch (message) {
 	case WM_ERASEBKGND:
