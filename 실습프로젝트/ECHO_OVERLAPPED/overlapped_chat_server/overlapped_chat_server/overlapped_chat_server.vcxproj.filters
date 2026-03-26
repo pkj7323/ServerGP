@@ -15,13 +15,7 @@
     </Filter>
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="main.cpp">
-      <Filter>소스 파일</Filter>
-    </ClCompile>
-    <ClCompile Include="overlapped_main.cpp">
-      <Filter>소스 파일</Filter>
-    </ClCompile>
-    <ClCompile Include="IOCP_main.cpp">
+    <ClCompile Include="overlapped_chat_server.cpp">
       <Filter>소스 파일</Filter>
     </ClCompile>
   </ItemGroup>

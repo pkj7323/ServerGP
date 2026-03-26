@@ -1,0 +1,7 @@
+<Solution>
+  <Configurations>
+    <Platform Name="x64" />
+    <Platform Name="x86" />
+  </Configurations>
+  <Project Path="chat_client/chat_client.vcxproj" Id="8c9d51a5-760f-4b23-a16d-5c02ae76dc49" />
+</Solution>
