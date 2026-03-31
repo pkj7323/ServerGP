@@ -153,22 +153,29 @@ public:
 
 
 std::unordered_map<long long, std::shared_ptr<SESSION>> clients;
-
-void DisconnectClient(long long id) {
-	auto it = clients.find(id);
-	if (it != clients.end()) {
-		std::cout << "[시스템] 클라이언트 접속 종료. ID: " << id << "\n";
-		closesocket(it->second->_client);
-		clients.erase(it);
-	}
-}
-
 void BroadCast(int num_bytes, char* mess)
 {
 	for (auto& [id, session] : clients) {
 		session->do_send(num_bytes, mess);
 	}
 }
+
+void DisconnectClient(long long id) {
+	auto it = clients.find(id);
+	if (it != clients.end()) {
+		SOCKET s = it->second->_client;
+		clients.erase(it);
+		SCLogoutPacket logout_packet{};
+		logout_packet.size = sizeof(SCLogoutPacket);
+		logout_packet.type = PacketType::SC_Logout;
+		logout_packet.client_id = id;
+		BroadCast(sizeof(SCLogoutPacket), reinterpret_cast<char*>(&logout_packet));
+		closesocket(s);
+		std::cout << "[시스템] 클라이언트 접속 종료. ID: " << id << "\n";
+	}
+}
+
+
 
 void ProcessPacket(std::shared_ptr<SESSION> session, char* buffer)
 {
