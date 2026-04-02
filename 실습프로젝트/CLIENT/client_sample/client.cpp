@@ -1,0 +1,327 @@
+#include <SFML/Graphics.hpp>
+#include <SFML/Network.hpp>
+#include <iostream>
+using namespace std;
+
+#include "..\..\SERVER\SERVER\Protocol.h"
+
+sf::TcpSocket socket;
+
+constexpr auto SCREEN_WIDTH = WORLD_WIDTH;
+constexpr auto SCREEN_HEIGHT = WORLD_HEIGHT;
+
+constexpr auto TILE_WIDTH = 65;
+constexpr auto WINDOW_WIDTH = SCREEN_WIDTH * TILE_WIDTH;   // size of window
+constexpr auto WINDOW_HEIGHT = SCREEN_WIDTH * TILE_WIDTH;
+constexpr auto MAX_USER = 10;
+constexpr int BUF_SIZE = 4096;
+int g_left_x;
+int g_top_y;
+int g_myid;
+
+sf::RenderWindow* g_window;
+sf::Font *g_font;
+
+class OBJECT {
+private:
+	bool m_showing;
+	sf::Sprite m_sprite;
+	sf::Text m_name;
+public:
+	int m_x, m_y;
+	char name[MAX_NAME_LEN];
+	OBJECT(sf::Texture& t, int x, int y, int x2, int y2) {
+		m_showing = false;
+		m_sprite.setTexture(t);
+		m_sprite.setTextureRect(sf::IntRect(x, y, x2, y2));
+	}
+	OBJECT() {
+		m_showing = false;
+	}
+	void show()
+	{
+		m_showing = true;
+	}
+	void hide()
+	{
+		m_showing = false;
+	}
+
+	void a_move(int x, int y) {
+		m_sprite.setPosition((float)x, (float)y);
+	}
+
+	void a_draw() {
+		g_window->draw(m_sprite);
+	}
+
+	void move(int x, int y) {
+		m_x = x;
+		m_y = y;
+	}
+	void draw() {
+		if (false == m_showing) return;
+		float rx = (m_x) * 65.0f + 1;
+		float ry = (m_y) * 65.0f + 1;
+		m_sprite.setPosition(rx, ry);
+		g_window->draw(m_sprite);
+		auto size = m_name.getGlobalBounds();
+		m_name.setPosition(rx + 32 - size.width / 2, ry - 10);
+		g_window->draw(m_name);
+	}
+
+	void set_name(const char str[]) {
+		m_name.setFont(*g_font);
+		m_name.setString(str);
+		m_name.setCharacterSize(20);
+		m_name.setFillColor(sf::Color(255, 255, 0));
+		m_name.setStyle(sf::Text::Bold);
+	}
+};
+
+OBJECT avatar;
+std::string avatar_name;
+OBJECT players[MAX_USER];
+
+OBJECT white_tile;
+OBJECT black_tile;
+
+sf::Texture* board;
+sf::Texture* pieces;
+void send_packet(void* packet)
+{
+	unsigned char* p = reinterpret_cast<unsigned char*>(packet);
+	size_t sent = 0;
+	socket.send(packet, p[0], sent);
+}
+
+void client_initialize()
+{
+	board = new sf::Texture;
+	pieces = new sf::Texture;
+	g_font = new sf::Font;
+	board->loadFromFile("chessmap.bmp");
+	pieces->loadFromFile("chess2.png");
+	if (false == g_font->loadFromFile("cour.ttf")) {
+		cout << "Font Loading Error!\n";
+		exit(-1);
+	}
+	white_tile = OBJECT{ *board, 5, 5, TILE_WIDTH, TILE_WIDTH };
+	black_tile = OBJECT{ *board, 69, 5, TILE_WIDTH, TILE_WIDTH };
+	avatar = OBJECT{ *pieces, 128, 0, 64, 64 };
+	avatar.set_name(avatar_name.c_str());
+	avatar.move(4, 4);
+	for (auto& pl : players) {
+		pl = OBJECT{ *pieces, 64, 0, 64, 64 };
+	}
+}
+
+void client_finish()
+{
+	delete g_font;
+	delete board;
+	delete pieces;
+}
+
+void ProcessPacket(char* ptr)
+{
+	static bool first_time = true;
+	packet_type* type = reinterpret_cast<packet_type*>(ptr + 1);
+	switch (*type)
+	{
+	case packet_type::S2C_AVATAR_INFO:
+	{
+		s2c_avatar_info* packet = reinterpret_cast<s2c_avatar_info*>(ptr);
+		g_myid = packet->id;
+		avatar.m_x = packet->x;
+		avatar.m_y = packet->y;
+		avatar.show();
+	}
+	break;
+
+	case packet_type::S2C_ADD_PLAYER:
+	{
+		s2c_add_player* my_packet = reinterpret_cast<s2c_add_player*>(ptr);
+		int id = my_packet->id;
+		if (id >= MAX_USER) {
+			std::cout << "Too many users! id : " << id << std::endl;
+			exit(-1);
+		}
+		players[id].move(my_packet->x, my_packet->y);
+		players[id].set_name(my_packet->userName);
+		players[id].show();
+		break;
+	}
+	case packet_type::S2C_PLAYER_MOVE:
+	{
+		s2c_player_move* my_packet = reinterpret_cast<s2c_player_move*>(ptr);
+		int other_id = my_packet->id;
+		if (other_id == g_myid) {
+			avatar.move(my_packet->x, my_packet->y);
+			g_left_x = my_packet->x - 4;
+			g_top_y = my_packet->y - 4;
+		}
+		else if (other_id < MAX_USER) {
+			players[other_id].move(my_packet->x, my_packet->y);
+		}
+		break;
+	}
+
+	case packet_type::S2C_REMOVE_PLAYER:
+	{
+		s2c_remove_player* my_packet = reinterpret_cast<s2c_remove_player*>(ptr);
+		int other_id = my_packet->id;
+		if (other_id == g_myid)
+			avatar.hide();
+		else if (other_id < MAX_USER)
+			players[other_id].hide();
+		break;
+	}
+	case packet_type::S2C_LOGIN_ACK:
+		{
+			s2c_login_ack* my_packet = reinterpret_cast<s2c_login_ack*>(ptr);
+			printf(my_packet->msg);
+			if (!my_packet->success)
+			{
+				exit(-1);
+			}
+		}
+	default:
+		printf("Unknown PACKET type [%d]\n", ptr[1]);
+	}
+}
+
+void process_data(char* net_buf, size_t io_byte)
+{
+	char* ptr = net_buf;
+	static size_t in_packet_size = 0;
+	static size_t saved_packet_size = 0;
+	static char packet_buffer[BUF_SIZE];
+
+	while (0 != io_byte) {
+		if (0 == in_packet_size) in_packet_size = ptr[0];
+		if (io_byte + saved_packet_size >= in_packet_size) {
+			memcpy(packet_buffer + saved_packet_size, ptr, in_packet_size - saved_packet_size);
+			ProcessPacket(packet_buffer);
+			ptr += in_packet_size - saved_packet_size;
+			io_byte -= in_packet_size - saved_packet_size;
+			in_packet_size = 0;
+			saved_packet_size = 0;
+		}
+		else {
+			memcpy(packet_buffer + saved_packet_size, ptr, io_byte);
+			saved_packet_size += io_byte;
+			io_byte = 0;
+		}
+	}
+}
+
+void client_main()
+{
+	char net_buf[BUF_SIZE];
+	size_t	received;
+
+	auto recv_result = socket.receive(net_buf, BUF_SIZE, received);
+	if (recv_result == sf::Socket::Error)
+	{
+		wcout << L"Recv 에러!";
+		while (true);
+	}
+	if (recv_result != sf::Socket::NotReady)
+		if (received > 0) process_data(net_buf, received);
+
+	for (int i = 0; i < SCREEN_WIDTH; ++i)
+		for (int j = 0; j < SCREEN_HEIGHT; ++j)
+		{
+			if (0 ==(i + j) % 2) {
+				white_tile.a_move(TILE_WIDTH * i, TILE_WIDTH * j);
+				white_tile.a_draw();
+			}
+			else
+			{
+				black_tile.a_move(TILE_WIDTH * i, TILE_WIDTH * j);
+				black_tile.a_draw();
+			}
+		}
+	avatar.draw();
+	for (auto& pl : players) pl.draw();
+}
+
+
+
+int main()
+{
+	wcout.imbue(locale("korean"));
+	std::cout << "Enter User Name : ";
+	std::cin >> avatar_name;
+	sf::Socket::Status status = socket.connect("127.0.0.1", PORT);
+	socket.setBlocking(false);
+
+	if (status != sf::Socket::Done) {
+		wcout << L"서버와 연결할 수 없습니다.\n";
+		while (true);
+	}
+
+	c2s_login p;
+	p.size = sizeof(p);
+	p.type = packet_type::C2S_LOGIN;
+	strcpy_s(p.userName, avatar_name.c_str());
+	send_packet(&p);
+
+
+	client_initialize();
+
+	sf::RenderWindow window(sf::VideoMode(WINDOW_WIDTH, WINDOW_HEIGHT), "2D CLIENT");
+	g_window = &window;
+
+	while (window.isOpen())
+	{
+		sf::Event event;
+		while (window.pollEvent(event))
+		{
+			if (event.type == sf::Event::Closed)
+				window.close();
+			if (event.type == sf::Event::KeyPressed) {
+				int x = -2;
+				int y = -2;
+				switch (event.key.code) {
+				case sf::Keyboard::Left:
+					x = -1;
+					y = 0;
+					break;
+				case sf::Keyboard::Right:
+					x = 1;
+					y = 0;
+					break;
+				case sf::Keyboard::Up:
+					x = 0;
+					y = -1;
+					break;
+				case sf::Keyboard::Down:
+					x = 0;
+					y = 1;
+					break;
+				case sf::Keyboard::Escape:
+					window.close();
+					break;
+				}
+				if (-2 != x && -2 != y) {
+					c2s_move p;
+					p.size = sizeof(p);
+					p.type = packet_type::C2S_MOVE;
+					p.dir.x = x;
+					p.dir.y = y;
+					send_packet(&p);
+				}
+
+			}
+		}
+
+		window.clear();
+		client_main();
+		window.display();
+	}
+	client_finish();
+
+	return 0;
+}
