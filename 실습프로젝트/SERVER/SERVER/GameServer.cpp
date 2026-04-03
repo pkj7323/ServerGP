@@ -47,15 +47,17 @@ public:
 		wsabuffer.buf = buff;
 		wsabuffer.len = BUF_SIZE;
 	}
-	EXP_OVER(io_type type, int num_bytes, char* mess) : type{ type }
+	EXP_OVER(io_type type) : type{ type }
 	{
 		ZeroMemory(&over, sizeof(over));
 		wsabuffer.buf = buff;
-		wsabuffer.len = num_bytes;
+		wsabuffer.len = BUF_SIZE;
 	}
+	
 };
 
-
+void broadcast_new_player(int new_player_id);
+void broadcast_player_remove_packet(int player_id);
 class SESSION {
 public:
 	SOCKET			client;
@@ -65,27 +67,15 @@ public:
 	int16_t 		x;
 	int16_t 		y;
 	char			userName[MAX_NAME_LEN];
-	int				prev_recv = 0;
+	int				prev_recv_count = 0;
 	SESSION() : x{0}, y{0}, userName{}
 	{
-		prev_recv = 0;
+		prev_recv_count = 0;
 		is_connected = false;
 		id = 999;
 		client = INVALID_SOCKET;
 		recv_over.type = io_type::recv;
 	}
-
-	SESSION(int id, SOCKET so) : id(id), client(so), x{0}, y{0}, userName{}
-	{
-		prev_recv = 0;
-		is_connected = true;
-		// 객체 대입을 하지 말고 직접 초기화하세요.
-		ZeroMemory(&recv_over.over, sizeof(WSAOVERLAPPED));
-		recv_over.type = io_type::recv;
-		recv_over.wsabuffer.buf = recv_over.buff; // 본인의 버퍼 주소로 재설정
-		recv_over.wsabuffer.len = BUF_SIZE;
-	}
-
 	~SESSION()
 	{
 		if (is_connected)
@@ -96,9 +86,10 @@ public:
 	}
 	void init()
 	{
-		prev_recv = 0;
+		prev_recv_count = 0;
 		is_connected = false;
 		id = 999;
+		closesocket(client);
 		client = INVALID_SOCKET;
 		x = 0;
 		y = 0;
@@ -112,55 +103,21 @@ public:
 	{
 		DWORD recv_flag = 0;
 		recv_over.over = {};
-		recv_over.type = io_type::recv;
-		recv_over.wsabuffer.buf = recv_over.buff; // 안전하게 여기서 다시 잡아줌
-		recv_over.wsabuffer.len = BUF_SIZE;	
+		// 남은 데이터(prev_recv_count) 뒤부터 이어 받도록 수정
+		recv_over.wsabuffer.buf = recv_over.buff + prev_recv_count;
+		recv_over.wsabuffer.len = BUF_SIZE - prev_recv_count;
 		WSARecv(client, &recv_over.wsabuffer, 1, 0, &recv_flag, &recv_over.over, nullptr);
 	}
 	void do_send(int num_bytes, char* mess)
 	{
-		EXP_OVER* o = new EXP_OVER(io_type::send, num_bytes, mess);
-		o->wsabuffer.buf = o->buff; // 안전하게 여기서 다시 잡아줌
+		EXP_OVER* o = new EXP_OVER(io_type::send);
 		o->wsabuffer.len = num_bytes;
 		memcpy(o->wsabuffer.buf, mess, num_bytes);
-		ZeroMemory(&o->over, sizeof(WSAOVERLAPPED));
 		WSASend(client, &o->wsabuffer, 1, 0, 0, &o->over, nullptr);
 	}
 
-	void proccess_packet(unsigned char* buff)
-	{
-		packet_type* type = reinterpret_cast<packet_type*>(&buff[1]);
-		switch (*type)
-		{
-		case packet_type::C2S_LOGIN:
-		{
-			c2s_login* p = reinterpret_cast<c2s_login*>(buff);
-			strncpy_s(userName, p->userName, MAX_NAME_LEN);
-			cout << "Client[" << id << "] Login: " << userName << endl;
-			send_avatar_info();
-			break;
-		}
-		case packet_type::C2S_MOVE:
-		{
-			c2s_move* p = reinterpret_cast<c2s_move*>(buff);
-			if (x > 0 && x < WORLD_WIDTH)
-			{
-				x += p->dir.x;
-			}
-			if (y > 0 && y < WORLD_HEIGHT)
-			{
-				y += p->dir.y;
-			}
-			cout << "Client[" << id << "] Move to (" << x << ", " << y << ")" << endl;
-			send_move_packet();
-			break;
-		}
-		default:
-			cout << "Unknown Packet Type from Client[" << id << "]" << endl;
-			break;
-		}
-		
-	}
+	void proccess_packet(unsigned char* buff);
+	
 
 	void send_avatar_info()
 	{
@@ -173,31 +130,88 @@ public:
 		do_send(sizeof(s2c_avatar_info), reinterpret_cast<char*>(&info_packet));
 	}
 
-	void send_move_packet()
-	{
-		s2c_player_move move_packet;
-		move_packet.size = sizeof(s2c_player_move);
-		move_packet.type = packet_type::S2C_PLAYER_MOVE;
-		move_packet.id = id;
-		move_packet.x = x;
-		move_packet.y = y;
-		do_send(sizeof(s2c_player_move), reinterpret_cast<char*>(&move_packet));
-	}
 
-
-	void send_login_ack()
+	void send_login_success()
 	{
 		s2c_login_ack ack_packet;
 		ack_packet.size = sizeof(s2c_login_ack);
 		ack_packet.type = packet_type::S2C_LOGIN_ACK;
 		ack_packet.success = true;
-		strcpy_s(ack_packet.msg, "Welcome");
-		do_send(sizeof(s2c_login_ack), reinterpret_cast<char*>(&ack_packet));
+		strcpy_s(ack_packet.msg, "Login successful.");
+		do_send(ack_packet.size, reinterpret_cast<char*>(&ack_packet));
 	}
+	void send_remove_player(int player_id)
+	{
+		s2c_remove_player packet;
+		packet.size = sizeof(s2c_remove_player);
+		packet.type = packet_type::S2C_REMOVE_PLAYER;
+		packet.id = player_id;
+		do_send(packet.size, reinterpret_cast<char*>(&packet));
+	}
+	void send_move_packet(int mover);
 	void send_add_player(int player_id);
+	void send_already_spawn_players();
 };
 
 std::array<SESSION, MAX_PLAYERS> clients;
+
+void SESSION::proccess_packet(unsigned char* buff)
+{
+	packet_type type = *reinterpret_cast<packet_type*>(&buff[1]);
+	switch (type)
+	{
+	case packet_type::C2S_LOGIN:
+	{
+		c2s_login* p = reinterpret_cast<c2s_login*>(buff);
+		strncpy_s(userName, p->userName, MAX_NAME_LEN);
+		cout << "Client[" << id << "] Login: " << userName << endl;
+		send_avatar_info();
+		send_already_spawn_players();
+		broadcast_new_player(id);
+		break;
+	}
+	case packet_type::C2S_MOVE:
+	{
+		c2s_move* packet = reinterpret_cast<c2s_move*>(buff);
+		int16_t dx = packet->dir.x;
+		int16_t dy = packet->dir.y;
+
+		int16_t new_x = x + dx;
+		int16_t new_y = y + dy;
+		if (new_x >= 0 && new_x < WORLD_WIDTH)
+		{
+			x = new_x;
+		}
+		if (new_y >= 0 && new_y < WORLD_HEIGHT)
+		{
+			y = new_y;
+		}
+
+		cout << "Player[" << id << "] moved to (" << x << ", " << y << ")\n";
+		for (auto& cl : clients)
+			if (true == cl.is_connected)
+				cl.send_move_packet(id);
+		break;
+	}
+
+	default:
+		cout << "Unknown Packet Type from Client[" << id << "]" << endl;
+		break;
+	}
+
+}
+
+
+void SESSION::send_move_packet(int mover) 
+{
+	s2c_player_move move_packet;
+	move_packet.size = sizeof(s2c_player_move);
+	move_packet.type = packet_type::S2C_PLAYER_MOVE;
+	move_packet.id = clients[mover].id;
+	move_packet.x = clients[mover].x;
+	move_packet.y = clients[mover].y;
+	do_send(move_packet.size, reinterpret_cast<char*>(&move_packet));
+}
 void SESSION::send_add_player(int player_id)
 {
 	s2c_add_player add_packet;
@@ -210,6 +224,17 @@ void SESSION::send_add_player(int player_id)
 	do_send(sizeof(s2c_add_player), reinterpret_cast<char*>(&add_packet));
 }
 
+void SESSION::send_already_spawn_players()
+{
+	for (int i = 0; i < MAX_PLAYERS; ++i)
+	{
+		if (clients[i].is_connected && clients[i].id != id)
+		{
+			send_add_player(clients[i].id);
+		}
+	}
+}
+
 void broadcast_new_player(int new_player_id)
 {
 	for (int i = 0; i < MAX_PLAYERS; ++i)
@@ -220,25 +245,9 @@ void broadcast_new_player(int new_player_id)
 		}
 	}
 }
-void broadcast_move_packet(int player_id)
+void broadcast_player_remove_packet(int player_id)
 {
-	for (int i = 0; i < MAX_PLAYERS; ++i)
-	{
-		if (clients[i].is_connected && clients[i].id != player_id)
-		{
-			s2c_player_move move_packet;
-			move_packet.size = sizeof(s2c_player_move);
-			move_packet.type = packet_type::S2C_PLAYER_MOVE;
-			move_packet.id = player_id;
-			move_packet.x = clients[player_id].x;
-			move_packet.y = clients[player_id].y;
-
-			clients[i].do_send(move_packet.size, reinterpret_cast<char*>(&move_packet));
-		}
-	}
-}
-void broadcast_remove_packet(int player_id)
-{
+	clients[player_id].is_connected = false;
 	for (int i = 0; i < MAX_PLAYERS; ++i)
 	{
 		if (clients[i].is_connected && clients[i].id != player_id)
@@ -250,7 +259,7 @@ void broadcast_remove_packet(int player_id)
 			clients[i].do_send(remove_packet.size, reinterpret_cast<char*>(&remove_packet));
 		}
 	}
-	
+	closesocket(clients[player_id].client);
 }
 
 
@@ -288,7 +297,7 @@ int main()
 
 	SOCKADDR_IN cl_addr;
 	SOCKET client = WSASocket(AF_INET, SOCK_STREAM, 0, NULL, 0, WSA_FLAG_OVERLAPPED);
-	EXP_OVER accept_over(io_type::accept, 0, nullptr);
+	EXP_OVER accept_over(io_type::accept);
 
 	int index = 0;
 	CreateIoCompletionPort((HANDLE)client, h_iocp, index, 0);
@@ -300,25 +309,28 @@ int main()
 		ULONG_PTR key;
 		LPOVERLAPPED over;
 		GetQueuedCompletionStatus(h_iocp, &bytes_transferred, &key, &over, INFINITE);
+		EXP_OVER* o = reinterpret_cast<EXP_OVER*>(over);
+		SESSION& session = clients[(int)key];
 		if (over == nullptr)
 		{
 			error_display(L"GetQueuedCompletionStatus Error", WSAGetLastError());
+			broadcast_player_remove_packet(session.id);
+			clients[(int)key].init(); // 세션 초기화
 			continue;
 		}
-		EXP_OVER* o = reinterpret_cast<EXP_OVER*>(over);
-		SESSION session = clients[(int)key];
-		if (o->type == io_type::recv && bytes_transferred == 0)
+		if (o->type == io_type::recv && bytes_transferred == 0 && WSAGetLastError() != WSA_IO_PENDING)
 		{
 			cout << "Client[" << session.id << "] Disconnected" << endl;
-			broadcast_remove_packet(session.id);
+			broadcast_player_remove_packet(session.id);
 			clients[(int)key].init(); // 세션 초기화
-
+			continue;
 		}
-		if (o->type == io_type::send && bytes_transferred == 0)
+		if (o->type == io_type::send && bytes_transferred == 0 && WSAGetLastError() != WSA_IO_PENDING)
 		{
-			broadcast_remove_packet(session.id);
+			broadcast_player_remove_packet(session.id);
 			clients[(int)key].init(); // 세션 초기화
 			delete o; // send 완료 후 오버랩드 객체 삭제
+			continue;
 		}
 		switch (o->type)
 		{
@@ -331,6 +343,7 @@ int main()
 				if (!clients[i].is_connected)
 				{
 					player_index = i;
+					break;
 				}
 			}
 			if (-1 == player_index)
@@ -348,14 +361,12 @@ int main()
 				clients[player_index].x = 0;
 				clients[player_index].y = 0;
 				clients[player_index].id = player_index;
-				clients[player_index].send_login_ack();
+				clients[player_index].send_login_success();
 				
 
 				clients[player_index].do_recv();
 			}
 			client = WSASocket(AF_INET, SOCK_STREAM, 0, NULL, 0, WSA_FLAG_OVERLAPPED);
-
-			accept_over = EXP_OVER(io_type::accept, 0, nullptr);
 			AcceptEx(server, client, &accept_over.buff, 0,
 				sizeof(SOCKADDR_IN) + 16, sizeof(SOCKADDR_IN) + 16,
 				NULL, &accept_over.over);
@@ -367,31 +378,31 @@ int main()
 			// 0바이트를 받았다면 클라이언트가 접속을 종료한 것임
 			if (bytes_transferred == 0) {
 				cout << "Client[" << client_id << "] Disconnected" << endl;
-				clients[(client_id)].init(); // 소켓은 소멸자에서 닫힘
+				clients[client_id].init(); // 소켓은 소멸자에서 닫힘
 				break;
 			}
 			SESSION& cl = clients[client_id];
 			unsigned char* p = reinterpret_cast<unsigned char*>(o->buff);
-			int data_size = bytes_transferred + cl.prev_recv;
+			int data_size = bytes_transferred + cl.prev_recv_count;
 			while (data_size > 0)
 			{
-				int packet_size = p[0];
+				unsigned char packet_size = p[0];
 				if (packet_size > data_size)
 				{
 					break;
 				}
-				cl.proccess_packet(reinterpret_cast<unsigned char*>(o->buff));
+				cl.proccess_packet(p);
 				p += packet_size;
 				data_size -= packet_size;
 			}
 			if (data_size > 0)
 			{
-				memmove(o->buff, p, data_size);
-				cl.prev_recv = data_size;
+				memmove(cl.recv_over.buff, p, data_size);
+				cl.prev_recv_count = data_size;
 			}
 			else
 			{
-				cl.prev_recv = 0;
+				cl.prev_recv_count = 0;
 				ZeroMemory(o->buff, sizeof(o->buff));
 			}
 			
@@ -400,14 +411,16 @@ int main()
 		}
 		case io_type::send:
 		{
-			cout << "Send Complete to Client[" << session.id << "], Bytes Sent: " << bytes_transferred << endl;
+			//packet_type sent_type = (*reinterpret_cast<packet_type*>(&o->wsabuffer.buf[1]));
+			//cout << "Send Complete to Client[" << session.id << "], Bytes Sent: " << bytes_transferred
+			//	<< " Packet Type = " << static_cast<uint16_t>(sent_type) << endl;
 			delete o;
 			break;
 		}
-			default:
-				cout << "Unknown IO Type!" << endl;
-				exit(-1);
-				break;
+		default:
+			cout << "Unknown IO Type!" << endl;
+			exit(-1);
+			break;
 		}
 	}
 	closesocket(server);

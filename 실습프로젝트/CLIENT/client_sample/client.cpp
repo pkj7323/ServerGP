@@ -13,7 +13,7 @@ constexpr auto SCREEN_HEIGHT = WORLD_HEIGHT;
 constexpr auto TILE_WIDTH = 65;
 constexpr auto WINDOW_WIDTH = SCREEN_WIDTH * TILE_WIDTH;   // size of window
 constexpr auto WINDOW_HEIGHT = SCREEN_WIDTH * TILE_WIDTH;
-constexpr auto MAX_USER = 10;
+constexpr auto MAX_USER = MAX_PLAYERS;
 constexpr int BUF_SIZE = 4096;
 int g_left_x;
 int g_top_y;
@@ -126,8 +126,8 @@ void client_finish()
 void ProcessPacket(char* ptr)
 {
 	static bool first_time = true;
-	packet_type* type = reinterpret_cast<packet_type*>(ptr + 1);
-	switch (*type)
+	packet_type type = *reinterpret_cast<packet_type*>(&ptr[1]);
+	switch (type)
 	{
 	case packet_type::S2C_AVATAR_INFO:
 	{
@@ -179,15 +179,24 @@ void ProcessPacket(char* ptr)
 	}
 	case packet_type::S2C_LOGIN_ACK:
 		{
-			s2c_login_ack* my_packet = reinterpret_cast<s2c_login_ack*>(ptr);
-			printf(my_packet->msg);
-			if (!my_packet->success)
-			{
+			s2c_login_ack* packet = reinterpret_cast<s2c_login_ack*>(ptr);
+			if (packet->success) {
+				std::cout << "Login Success! : " << packet->msg << std::endl;
+				c2s_login p;
+				p.size = sizeof(c2s_login);
+				p.type = packet_type::C2S_LOGIN;
+				strcpy_s(p.userName, avatar_name.c_str());
+				send_packet((char*)&p);
+			}
+			else {
+				std::cout << "Login Failed! : " << packet->msg << std::endl;
 				exit(-1);
 			}
 		}
+		break;
 	default:
 		printf("Unknown PACKET type [%d]\n", ptr[1]);
+		break;
 	}
 }
 
@@ -262,13 +271,6 @@ int main()
 		while (true);
 	}
 
-	c2s_login p;
-	p.size = sizeof(p);
-	p.type = packet_type::C2S_LOGIN;
-	strcpy_s(p.userName, avatar_name.c_str());
-	send_packet(&p);
-
-
 	client_initialize();
 
 	sf::RenderWindow window(sf::VideoMode(WINDOW_WIDTH, WINDOW_HEIGHT), "2D CLIENT");
@@ -307,7 +309,7 @@ int main()
 				}
 				if (-2 != x && -2 != y) {
 					c2s_move p;
-					p.size = sizeof(p);
+					p.size = sizeof(c2s_move);
 					p.type = packet_type::C2S_MOVE;
 					p.dir.x = x;
 					p.dir.y = y;
