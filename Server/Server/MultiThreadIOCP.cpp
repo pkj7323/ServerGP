@@ -159,7 +159,7 @@ public:
 		packet.id = player_id;
 		do_send(packet.size, reinterpret_cast<char*>(&packet));
 	}
-	void send_move_packet(int mover);
+	void send_move_packet(int mover, uint32_t timestamp);
 	void send_add_player(int player_id);
 	void send_already_spawn_players();
 };
@@ -176,7 +176,7 @@ void SESSION::proccess_packet(unsigned char* buff)
 	{
 		c2s_login* p = reinterpret_cast<c2s_login*>(buff);
 		strncpy_s(userName_, p->userName, MAX_NAME_LEN);
-		std::cout << "Client[" << id_ << "] Login: " << userName_ << std::endl;
+		//std::cout << "Client[" << id_ << "] Login: " << userName_ << std::endl;
 		state_ = client_state::playing;
 		send_avatar_info();
 		send_already_spawn_players();
@@ -200,13 +200,13 @@ void SESSION::proccess_packet(unsigned char* buff)
 			y_ = new_y;
 		}
 
-		std::cout << "Player[" << id_ << "] moved to (" << x_ << ", " << y_ << ")\n";
+		//std::cout << "Player[" << id_ << "] moved to (" << x_ << ", " << y_ << ")\n";
 		for (auto& [id, session] : clients)
 		{
 			std::shared_ptr<SESSION> s = session.load();
 			if (nullptr == s) continue;
 			if (client_state::playing == s->state_)
-				s->send_move_packet(id_);
+				s->send_move_packet(id_, packet->timestamp);
 		}
 		break;
 	}
@@ -219,7 +219,7 @@ void SESSION::proccess_packet(unsigned char* buff)
 }
 
 
-void SESSION::send_move_packet(int move_player_id)
+void SESSION::send_move_packet(int move_player_id, uint32_t timestamp)
 {
 	std::shared_ptr<SESSION> player = clients[move_player_id].load();
 	s2c_player_move move_packet;
@@ -228,6 +228,7 @@ void SESSION::send_move_packet(int move_player_id)
 	move_packet.id = player->id_;
 	move_packet.x = player->x_;
 	move_packet.y = player->y_;
+	move_packet.timestamp = timestamp;
 	do_send(move_packet.size, reinterpret_cast<char*>(&move_packet));
 }
 void SESSION::send_add_player(int player_id)
@@ -347,15 +348,15 @@ void worker_thread()
 		{
 		case io_type::accept:
 		{
-			std::cout << "New Client Connected!" << std::endl;
+			//std::cout << "New Client Connected!" << std::endl;
 			int current_id = player_index++;
 			CreateIoCompletionPort((HANDLE)o->accept_socket, h_iocp, current_id, 0);
 			std::shared_ptr<SESSION> new_session = std::make_shared<SESSION>();
 			new_session->id_ = current_id;
 			new_session->client_ = o->accept_socket;
 			new_session->state_ = client_state::connected;
-			new_session->x_ = 0;
-			new_session->y_ = 0;
+			new_session->x_ = rand() % WORLD_WIDTH;
+			new_session->y_ = rand() % WORLD_HEIGHT;
 			clients.emplace(current_id, new_session);
 			new_session->send_login_success();
 			new_session->do_recv();

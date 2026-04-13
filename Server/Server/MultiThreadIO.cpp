@@ -88,7 +88,20 @@ public:
 	}
 	int do_send(int num_bytes, char* mess)
 	{
-		return send(client_, mess, num_bytes, 0);
+		int total_sent = 0;
+		while (total_sent < num_bytes) {
+			int sent = send(client_, mess + total_sent, num_bytes - total_sent, 0);
+			if (sent == SOCKET_ERROR) {
+				int err = WSAGetLastError();
+				if (err == WSAEWOULDBLOCK) {
+					std::this_thread::yield();
+					continue;
+				}
+				return SOCKET_ERROR;
+			}
+			total_sent += sent;
+		}
+		return total_sent;
 	}
 
 	void proccess_packet(unsigned char* buff);
@@ -123,7 +136,7 @@ public:
 		packet.id = player_id;
 		do_send(packet.size, reinterpret_cast<char*>(&packet));
 	}
-	void send_move_packet(int mover);
+	void send_move_packet(int mover, uint32_t timestamp);
 	void send_add_player(int player_id);
 	void send_already_spawn_players();
 };
@@ -141,7 +154,7 @@ void SESSION::proccess_packet(unsigned char* buff)
 	{
 		c2s_login* p = reinterpret_cast<c2s_login*>(buff);
 		strncpy_s(userName_, p->userName, MAX_NAME_LEN);
-		std::cout << "Client[" << id_ << "] Login: " << userName_ << std::endl;
+		//std::cout << "Client[" << id_ << "] Login: " << userName_ << std::endl;
 		state_ = client_state::playing;
 		send_avatar_info();
 		send_already_spawn_players();
@@ -165,13 +178,13 @@ void SESSION::proccess_packet(unsigned char* buff)
 			y_ = new_y;
 		}
 
-		std::cout << "Player[" << id_ << "] moved to (" << x_ << ", " << y_ << ")\n";
+		//std::cout << "Player[" << id_ << "] moved to (" << x_ << ", " << y_ << ")\n";
 		for (auto& [id, session] : clients)
 		{
 			std::shared_ptr<SESSION> o = session.load();
 			if (nullptr == o) continue;
 			if (client_state::playing == o->state_)
-				o->send_move_packet(id_);
+				o->send_move_packet(id_, packet->timestamp);
 		}
 		break;
 	}
@@ -184,7 +197,7 @@ void SESSION::proccess_packet(unsigned char* buff)
 }
 
 
-void SESSION::send_move_packet(int move_player_id)
+void SESSION::send_move_packet(int move_player_id, uint32_t timestamp)
 {
 	std::shared_ptr<SESSION> player = clients[move_player_id];
 	s2c_player_move move_packet;
@@ -193,6 +206,7 @@ void SESSION::send_move_packet(int move_player_id)
 	move_packet.id = player->id_;
 	move_packet.x = player->x_;
 	move_packet.y = player->y_;
+	move_packet.timestamp = timestamp;
 	do_send(move_packet.size, reinterpret_cast<char*>(&move_packet));
 }
 void SESSION::send_add_player(int player_id)
@@ -283,7 +297,7 @@ void worker_thread(int client_id)
 	{
 		int r_ret = session->do_recv();
 		if (r_ret > 0) {
-			std::cout << "Received " << r_ret << " bytes from ID: " << session->id_ << "\n";
+			//std::cout << "Received " << r_ret << " bytes from ID: " << session->id_ << "\n";
 
 			if (nullptr == session)
 			{
@@ -315,17 +329,19 @@ void worker_thread(int client_id)
 		}
 		else if (r_ret == 0) {
 			// 클라이언트가 정상 종료함
-			std::cout << "Client Disconnected. ID: " << session->id_ << "\n";
+			//std::cout << "Client Disconnected. ID: " << session->id_ << "\n";
 			client_disconnect(session->id_);
+			return;
 		}
 		else {
 			int err = WSAGetLastError();
 			if (err == WSAEWOULDBLOCK) {
-				// 수신할 데이터가 없음: 그냥 다음 클라이언트로 넘어감
+				// 수신할 데이터가 없음: 잠시 쉬어줌
+				std::this_thread::sleep_for(std::chrono::milliseconds(1));
 			}
 			else {
 				// 진짜 에러 발생 (연결 강제 종료 등)
-				std::cout << "Client Error. ID: " << session->id_ << "\n";
+				//std::cout << "Client Error. ID: " << session->id_ << "\n";
 				client_disconnect(session->id_);
 				return;
 			}
@@ -339,6 +355,9 @@ int main()
 	WSADATA WSAData;
 	WSAStartup(MAKEWORD(2, 2), &WSAData);
 	server_socket = socket(AF_INET, SOCK_STREAM, 0);
+
+	unsigned long non_blocking = 1;
+	ioctlsocket(server_socket, FIONBIO, &non_blocking);
 
 	SOCKADDR_IN server_addr{};
 	server_addr.sin_family = AF_INET;
@@ -354,6 +373,7 @@ int main()
 		SOCKET client_sock = accept(server_socket, (sockaddr*)&c_addr, &len);
 
 		if (client_sock != INVALID_SOCKET) {
+			ioctlsocket(client_sock, FIONBIO, &non_blocking);
 			int id = player_index++;
 			auto session = std::make_shared<SESSION>();
 			session->client_ = client_sock;

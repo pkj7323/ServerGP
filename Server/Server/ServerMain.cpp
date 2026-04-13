@@ -190,7 +190,7 @@ void ProcessPacket(std::shared_ptr<SESSION> session, char* buffer)
 			if (newPos.x < BOARD_SIZE && newPos.x > -1) session->_pos.x = newPos.x;
 			if (newPos.y < BOARD_SIZE && newPos.y > -1) session->_pos.y = newPos.y;
 
-			std::cout << "Client[" << session->_id << "] Move: New Pos(" << session->_pos.x << ", " << session->_pos.y << ")\n";
+			//std::cout << "Client[" << session->_id << "] Move: New Pos(" << session->_pos.x << ", " << session->_pos.y << ")\n";
 
 			// 응답 패킷 만들기
 			SCMovePacket send_packet{};
@@ -204,7 +204,7 @@ void ProcessPacket(std::shared_ptr<SESSION> session, char* buffer)
 		}
 	case PacketType::CS_Login:
 		{
-			std::cout << "Received Login Packet from Client[" << session->_id << "]\n";
+			//std::cout << "Received Login Packet from Client[" << session->_id << "]\n";
 			session->_pos = { 0, 0 }; // 초기 위치 설정
 			SCLoginAckPacket ack_packet{};
 			ack_packet.size = sizeof(SCLoginAckPacket);
@@ -238,7 +238,7 @@ void ProcessPacket(std::shared_ptr<SESSION> session, char* buffer)
 		}
 		case PacketType::CS_Logout:
 		{
-			std::cout << "Received Logout Packet from Client[" << session->_id << "]\n";
+			//std::cout << "Received Logout Packet from Client[" << session->_id << "]\n";
 			SCLogoutPacket logout_packet{};
 			logout_packet.size = sizeof(SCLogoutPacket);
 			logout_packet.type = PacketType::SC_Logout;
@@ -319,7 +319,7 @@ void main()
 	bind(server_socket, reinterpret_cast<sockaddr*>(&server_addr), sizeof(server_addr));
 	listen(server_socket, SOMAXCONN);
 
-	std::cout << "Server started on port " << SERVER_PORT << std::endl;
+	//std::cout << "Server started on port " << SERVER_PORT << std::endl;
 
 	INT addr_len = sizeof(server_addr);
 	SOCKADDR_IN cl_addr;

@@ -27,7 +27,7 @@ const static int MAX_BUFF_SIZE = 255;
 
 #pragma comment (lib, "ws2_32.lib")
 
-#include "..\..\iocp_game_server\iocp_game_server\protocol.h"
+#include "../../Server/Server/Protocol.h"
 
 HANDLE g_hiocp;
 
@@ -126,18 +126,19 @@ void SendPacket(int cl, void* packet)
 
 void ProcessPacket(int ci, unsigned char packet[])
 {
-	switch (packet[1]) {
-	case S2C_LOGIN_RESULT:
+	packet_type ptype = static_cast<packet_type>(packet[1]);
+	switch (ptype) {
+	case packet_type::S2C_LOGIN_ACK:
 	{
-		S2C_LoginResult* p = reinterpret_cast<S2C_LoginResult*>(packet);
+		s2c_login_ack* p = reinterpret_cast<s2c_login_ack*>(packet);
 		if (p->success) {
 
-			C2S_Login l_packet;
+			c2s_login l_packet;
 
 			int temp = num_connections;
-			sprintf_s(l_packet.username, "%d", temp);
+			sprintf_s(l_packet.userName, "%d", temp);
 			l_packet.size = sizeof(l_packet);
-			l_packet.type = C2S_LOGIN;
+			l_packet.type = packet_type::C2S_LOGIN;
 			SendPacket(ci, &l_packet);
 		}
 		else {
@@ -145,17 +146,17 @@ void ProcessPacket(int ci, unsigned char packet[])
 			//g_window->close();
 		}
 	}
-	case S2C_MOVE_PLAYER: {
-		S2C_MovePlayer* move_packet = reinterpret_cast<S2C_MovePlayer*>(packet);
-		if (move_packet->playerId < MAX_CLIENTS) {
-			int my_id = client_map[move_packet->playerId];
+	case packet_type::S2C_PLAYER_MOVE: {
+		s2c_player_move* move_packet = reinterpret_cast<s2c_player_move*>(packet);
+		if (move_packet->id < MAX_CLIENTS) {
+			int my_id = client_map[move_packet->id];
 			if (-1 != my_id) {
 				g_clients[my_id].x = move_packet->x;
 				g_clients[my_id].y = move_packet->y;
 			}
 			if (ci == my_id) {
-				if (0 != move_packet->move_time) {
-					auto d_ms = duration_cast<milliseconds>(high_resolution_clock::now().time_since_epoch()).count() - move_packet->move_time;
+				if (0 != move_packet->timestamp) {
+					auto d_ms = duration_cast<milliseconds>(high_resolution_clock::now().time_since_epoch()).count() - move_packet->timestamp;
 
 					if (global_delay < d_ms) global_delay++;
 					else if (global_delay > d_ms) global_delay--;
@@ -164,16 +165,16 @@ void ProcessPacket(int ci, unsigned char packet[])
 		}
 	}
 					   break;
-	case S2C_ADD_PLAYER: break;
-	case S2C_REMOVE_PLAYER: break;
-	case S2C_AVATAR_INFO:
+	case packet_type::S2C_ADD_PLAYER: break;
+	case packet_type::S2C_REMOVE_PLAYER: break;
+	case packet_type::S2C_AVATAR_INFO:
 	{
 		g_clients[ci].connected = true;
 		active_clients++;
-		S2C_AvatarInfo* login_packet = reinterpret_cast<S2C_AvatarInfo*>(packet);
+		s2c_avatar_info* login_packet = reinterpret_cast<s2c_avatar_info*>(packet);
 		int my_id = ci;
-		client_map[login_packet->playerId] = my_id;
-		g_clients[my_id].id = login_packet->playerId;
+		client_map[login_packet->id] = my_id;
+		g_clients[my_id].id = login_packet->id;
 		g_clients[my_id].x = login_packet->x;
 		g_clients[my_id].y = login_packet->y;
 
@@ -356,16 +357,16 @@ void Test_Thread()
 			if (false == g_clients[i].connected) continue;
 			if (g_clients[i].last_move_time + 1s > high_resolution_clock::now()) continue;
 			g_clients[i].last_move_time = high_resolution_clock::now();
-			C2S_Move my_packet;
+			c2s_move my_packet;
 			my_packet.size = sizeof(my_packet);
-			my_packet.type = C2S_MOVE;
+			my_packet.type = packet_type::C2S_MOVE;
 			switch (rand() % 4) {
-			case 0: my_packet.dir = UP; break;
-			case 1: my_packet.dir = DOWN; break;
-			case 2: my_packet.dir = LEFT; break;
-			case 3: my_packet.dir = RIGHT; break;
+			case 0: my_packet.dir = {0,1}; break;
+			case 1: my_packet.dir = {0,-1}; break;
+			case 2: my_packet.dir = {-1,0}; break;
+			case 3: my_packet.dir = {1,0}; break;
 			}
-			my_packet.move_time = static_cast<unsigned>(duration_cast<milliseconds>(high_resolution_clock::now().time_since_epoch()).count());
+			my_packet.timestamp = static_cast<unsigned>(duration_cast<milliseconds>(high_resolution_clock::now().time_since_epoch()).count());
 			SendPacket(i, &my_packet);
 		}
 	}

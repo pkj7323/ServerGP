@@ -7,6 +7,7 @@
 #include <array>
 #include <unordered_map>
 #include <vector>
+#include <thread>
 
 #include "Protocol.h"
 
@@ -83,11 +84,23 @@ public:
 	}
 	int do_recv()
 	{
-		return recv(client_, recv_buffer_ + prev_recv_count_,1024 - prev_recv_count_, 0);
+		return recv(client_, recv_buffer_ + prev_recv_count_, 1024 - prev_recv_count_, 0);
 	}
 	int do_send(int num_bytes, char* mess)
 	{
-		return send(client_, mess, num_bytes, 0);
+		int total_sent = 0;
+		while (total_sent < num_bytes) {
+			int sent = send(client_, mess + total_sent, num_bytes - total_sent, 0);
+			if (sent == SOCKET_ERROR) {
+				int err = WSAGetLastError();
+				if (err == WSAEWOULDBLOCK) {
+					continue;
+				}
+				return SOCKET_ERROR;
+			}
+			total_sent += sent;
+		}
+		return total_sent;
 	}
 
 	void proccess_packet(unsigned char* buff);
@@ -122,7 +135,7 @@ public:
 		packet.id = player_id;
 		do_send(packet.size, reinterpret_cast<char*>(&packet));
 	}
-	void send_move_packet(int mover);
+	void send_move_packet(int mover, uint32_t timestamp);
 	void send_add_player(int player_id);
 	void send_already_spawn_players();
 };
@@ -140,7 +153,7 @@ void SESSION::proccess_packet(unsigned char* buff)
 	{
 		c2s_login* p = reinterpret_cast<c2s_login*>(buff);
 		strncpy_s(userName_, p->userName, MAX_NAME_LEN);
-		std::cout << "Client[" << id_ << "] Login: " << userName_ << std::endl;
+		//std::cout << "Client[" << id_ << "] Login: " << userName_ << std::endl;
 		state_ = client_state::playing;
 		send_avatar_info();
 		send_already_spawn_players();
@@ -164,12 +177,12 @@ void SESSION::proccess_packet(unsigned char* buff)
 			y_ = new_y;
 		}
 
-		std::cout << "Player[" << id_ << "] moved to (" << x_ << ", " << y_ << ")\n";
+		//std::cout << "Player[" << id_ << "] moved to (" << x_ << ", " << y_ << ")\n";
 		for (auto& [id, session] : clients)
 		{
 			if (nullptr == session) continue;
 			if (client_state::playing == session->state_)
-				session->send_move_packet(id_);
+				session->send_move_packet(id_, packet->timestamp);
 		}
 		break;
 	}
@@ -182,7 +195,7 @@ void SESSION::proccess_packet(unsigned char* buff)
 }
 
 
-void SESSION::send_move_packet(int move_player_id)
+void SESSION::send_move_packet(int move_player_id, uint32_t timestamp)
 {
 	std::shared_ptr<SESSION> player = clients[move_player_id];
 	s2c_player_move move_packet;
@@ -191,6 +204,7 @@ void SESSION::send_move_packet(int move_player_id)
 	move_packet.id = player->id_;
 	move_packet.x = player->x_;
 	move_packet.y = player->y_;
+	move_packet.timestamp = timestamp;
 	do_send(move_packet.size, reinterpret_cast<char*>(&move_packet));
 }
 void SESSION::send_add_player(int player_id)
@@ -302,8 +316,11 @@ int main()
 			auto session = std::make_shared<SESSION>();
 			session->client_ = client_sock;
 			session->id_ = id;
+			session->state_ = client_state::connected;
+			session->x_ = rand() % WORLD_WIDTH;
+			session->y_ = rand() % WORLD_HEIGHT;
 			clients[id] = session;
-			std::cout << "New Client Connected! ID: " << id << "\n";
+			//std::cout << "New Client Connected! ID: " << id << "\n";
 		}
 		else {
 			int err = WSAGetLastError();
@@ -318,7 +335,7 @@ int main()
 			int r_ret = session->do_recv();
 
 			if (r_ret > 0) {
-				std::cout << "Received " << r_ret << " bytes from ID: " << session->id_ << "\n";
+				//std::cout << "Received " << r_ret << " bytes from ID: " << session->id_ << "\n";
 
 				if (nullptr == session)
 				{
@@ -352,7 +369,7 @@ int main()
 			}
 			else if (r_ret == 0) {
 				// 클라이언트가 정상 종료함
-				std::cout << "Client Disconnected. ID: " << session->id_ << "\n";
+				//std::cout << "Client Disconnected. ID: " << session->id_ << "\n";
 				client_disconnect(session->id_);
 				it = clients.erase(it);
 			}
@@ -364,7 +381,7 @@ int main()
 				}
 				else {
 					// 진짜 에러 발생 (연결 강제 종료 등)
-					std::cout << "Client Error. ID: " << session->id_ << "\n";
+					//std::cout << "Client Error. ID: " << session->id_ << "\n";
 					client_disconnect(session->id_);
 					it = clients.erase(it);
 				}
