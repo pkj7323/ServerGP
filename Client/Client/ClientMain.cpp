@@ -6,253 +6,281 @@
 #include <string>
 #include <iostream>
 #include <unordered_map>
+#include "../../Server/Server/Protocol.h"
 
-enum class PacketType : int32_t
-{
-	CS_Move = 1,
-	SC_Move = 2,
-	CS_Login = 10,
-	SC_LoginAck = 11,
-	CS_Logout = 12,
-	SC_Logout = 13,
-	SC_Spawn = 20,
+// Player struct to store information for ourselves and others
+struct Player {
+    int id;
+    std::string name;
+    int16_t x, y;
 };
 
-#pragma pack(push, 1)
-struct CSMovePacket
-{
-	uint32_t	size;
-	PacketType	type;
-	struct { int x, y; } dir;
-};
-struct SCMovePacket
-{
-	uint32_t	size;
-	PacketType	type;
-	long long	client_id;
-	struct { int x, y; } pos;
-};
-struct CSLoginPacket
-{
-	uint32_t	size;
-	PacketType	type;
-};
-struct SCLoginAckPacket
-{
-	uint32_t	size;
-	PacketType	type;
-	long long	client_id;
-};
-struct SCSpawnPacket
-{
-	uint32_t	size;
-	PacketType	type;
-	long long	client_id;
-	struct { int x, y; } pos;
-};
-struct SCLogoutPacket
-{
-	uint32_t	size;
-	PacketType	type;
-	long long	client_id;
-};
-#pragma pack(pop)
-
-void error_display(const std::wstring& msg, int err_no)
-{
-	WCHAR* lpMsgBuf;
-	FormatMessage(FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM, NULL, err_no,
-		MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT), (LPTSTR)&lpMsgBuf, 0, NULL);
-	std::wcout << msg << L"=== 에러 " << lpMsgBuf << std::endl;
-	LocalFree(lpMsgBuf);
-}
-
-std::string SERVER_IP = "127.0.0.1";
-constexpr short SERVER_PORT = 3001;
-constexpr int BUFFER_SIZE = 4096;
-constexpr int BOARD_SIZE = 8;
-
-struct Position { int x, y; };
-std::unordered_map<long long, Position> g_players;
-long long g_my_id = -1;
-
+// Global state
+std::unordered_map<int, Player> g_players;
+int g_my_id = -1;
 SOCKET g_socket = INVALID_SOCKET;
 bool isRunning = true;
-std::chrono::steady_clock::time_point lastTime;
+std::string g_username;
+HBITMAP g_hBoardBmp = NULL;
 
-void send_packet(void* packet, int size) {
-	WSABUF buf{ (ULONG)size, (char*)packet };
-	DWORD sent;
-	WSASend(g_socket, &buf, 1, &sent, 0, nullptr, nullptr);
+// Constants for rendering
+constexpr int CELL_SIZE = 65;
+constexpr int WINDOW_WIDTH = WORLD_WIDTH * CELL_SIZE;
+constexpr int WINDOW_HEIGHT = WORLD_HEIGHT * CELL_SIZE;
+
+void error_display(const std::wstring& msg, int err_no) {
+    WCHAR* lpMsgBuf;
+    FormatMessage(FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM, NULL, err_no,
+        MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT), (LPTSTR)&lpMsgBuf, 0, NULL);
+    std::wcout << msg << L"=== 에러: " << lpMsgBuf << std::endl;
+    LocalFree(lpMsgBuf);
+}
+
+void send_packet(void* packet) {
+    unsigned char size = *reinterpret_cast<unsigned char*>(packet);
+    WSABUF buf{ (ULONG)size, (char*)packet };
+    DWORD sent;
+    if (WSASend(g_socket, &buf, 1, &sent, 0, nullptr, nullptr) == SOCKET_ERROR) {
+        if (WSAGetLastError() != WSAEWOULDBLOCK) {
+            isRunning = false;
+        }
+    }
 }
 
 void process_packet(char* ptr) {
-	PacketType type = *reinterpret_cast<PacketType*>(ptr + 4);
-	switch (type) {
-	case PacketType::SC_LoginAck: {
-		SCLoginAckPacket* p = reinterpret_cast<SCLoginAckPacket*>(ptr);
-		g_my_id = p->client_id;
-		std::cout << "Login Success. My ID: " << g_my_id << "\n";
-		break;
-	}
-	case PacketType::SC_Spawn: {
-		SCSpawnPacket* p = reinterpret_cast<SCSpawnPacket*>(ptr);
-		g_players[p->client_id] = { p->pos.x, p->pos.y };
-		break;
-	}
-	case PacketType::SC_Move: {
-		SCMovePacket* p = reinterpret_cast<SCMovePacket*>(ptr);
-		g_players[p->client_id] = { p->pos.x, p->pos.y };
-		break;
-	}
-	case PacketType::SC_Logout: {
-		SCLogoutPacket* p = reinterpret_cast<SCLogoutPacket*>(ptr);
-		g_players.erase(p->client_id);
-		break;
-	}
-	}
+    packet_header* header = reinterpret_cast<packet_header*>(ptr);
+    switch (header->type) {
+    case packet_type::S2C_LOGIN_ACK: {
+        s2c_login_ack* p = reinterpret_cast<s2c_login_ack*>(ptr);
+        if (p->success) {
+            std::cout << "Login successful. Message: " << p->msg << "\n";
+        } else {
+            std::cout << "Login failed. Message: " << p->msg << "\n";
+            isRunning = false;
+        }
+        break;
+    }
+    case packet_type::S2C_AVATAR_INFO: {
+        s2c_avatar_info* p = reinterpret_cast<s2c_avatar_info*>(ptr);
+        g_my_id = p->id;
+        g_players[g_my_id] = { p->id, g_username, p->x, p->y };
+        std::cout << "Avatar Info: ID=" << g_my_id << " at (" << p->x << ", " << p->y << ")\n";
+        break;
+    }
+    case packet_type::S2C_ADD_PLAYER: {
+        s2c_add_player* p = reinterpret_cast<s2c_add_player*>(ptr);
+        if (p->id == g_my_id) break;
+        g_players[p->id] = { p->id, p->userName, p->x, p->y };
+        std::cout << "Add Player: ID=" << p->id << ", Name=" << p->userName << " at (" << p->x << ", " << p->y << ")\n";
+        break;
+    }
+    case packet_type::S2C_PLAYER_MOVE: {
+        s2c_player_move* p = reinterpret_cast<s2c_player_move*>(ptr);
+        if (g_players.count(p->id)) {
+            g_players[p->id].x = p->x;
+            g_players[p->id].y = p->y;
+        }
+        break;
+    }
+    case packet_type::S2C_REMOVE_PLAYER: {
+        s2c_remove_player* p = reinterpret_cast<s2c_remove_player*>(ptr);
+        g_players.erase(p->id);
+        std::cout << "Remove Player: ID=" << p->id << "\n";
+        break;
+    }
+    }
 }
 
 void process_network() {
-	static char recv_buf[BUFFER_SIZE];
-	static int curr_size = 0;
+    static char recv_buf[1024];
+    static int curr_size = 0;
 
-	fd_set read_set;
-	FD_ZERO(&read_set);
-	FD_SET(g_socket, &read_set);
-	timeval tv{ 0, 0 };
+    fd_set read_set;
+    FD_ZERO(&read_set);
+    FD_SET(g_socket, &read_set);
+    timeval tv{ 0, 0 };
 
-	if (select(0, &read_set, nullptr, nullptr, &tv) > 0) {
-		int ret = recv(g_socket, recv_buf + curr_size, BUFFER_SIZE - curr_size, 0);
-		if (ret <= 0) 
-		{ 
-			isRunning = false; 
-			return; 
-		}
-		curr_size += ret;
+    if (select(0, &read_set, nullptr, nullptr, &tv) > 0) {
+        int ret = recv(g_socket, recv_buf + curr_size, 1024 - curr_size, 0);
+        if (ret == 0) {
+            isRunning = false;
+            return;
+        }
+        if (ret == SOCKET_ERROR) {
+            if (WSAGetLastError() != WSAEWOULDBLOCK) isRunning = false;
+            return;
+        }
+        curr_size += ret;
 
-		while (curr_size >= 4) {
-			uint32_t packet_size = *reinterpret_cast<uint32_t*>(recv_buf);
-			if (curr_size < (int)packet_size) break;
-			process_packet(recv_buf);
-			curr_size -= packet_size;
-			if (curr_size > 0) memmove(recv_buf, recv_buf + packet_size, curr_size);
-		}
-	}
+        while (curr_size >= 1) {
+            unsigned char packet_size = static_cast<unsigned char>(recv_buf[0]);
+            if (curr_size < (int)packet_size) break;
+            process_packet(recv_buf);
+            curr_size -= packet_size;
+            if (curr_size > 0) memmove(recv_buf, recv_buf + packet_size, curr_size);
+        }
+    }
 }
 
 void render(HWND hWnd) {
-	HDC hdc = GetDC(hWnd);
-	RECT clientRect;
-	GetClientRect(hWnd, &clientRect);
-	int width = clientRect.right - clientRect.left;
-	int height = clientRect.bottom - clientRect.top;
-	if (width <= 0 || height <= 0) { ReleaseDC(hWnd, hdc); return; }
+    HDC hdc = GetDC(hWnd);
+    RECT clientRect;
+    GetClientRect(hWnd, &clientRect);
+    int width = clientRect.right - clientRect.left;
+    int height = clientRect.bottom - clientRect.top;
+    if (width <= 0 || height <= 0) { ReleaseDC(hWnd, hdc); return; }
 
-	int cellWidth = width / BOARD_SIZE;
-	int cellHeight = height / BOARD_SIZE;
+    HDC memDC = CreateCompatibleDC(hdc);
+    HBITMAP memBitmap = CreateCompatibleBitmap(hdc, width, height);
+    HBITMAP oldBitmap = (HBITMAP)SelectObject(memDC, memBitmap);
 
-	HDC memDC = CreateCompatibleDC(hdc);
-	HBITMAP memBitmap = CreateCompatibleBitmap(hdc, width, height);
-	HBITMAP oldBitmap = (HBITMAP)SelectObject(memDC, memBitmap);
+    HDC boardDC = CreateCompatibleDC(hdc);
+    HBITMAP oldBoardBmp = NULL;
+    if (g_hBoardBmp) oldBoardBmp = (HBITMAP)SelectObject(boardDC, g_hBoardBmp);
 
-	FillRect(memDC, &clientRect, (HBRUSH)GetStockObject(WHITE_BRUSH));
+    // Background
+    FillRect(memDC, &clientRect, (HBRUSH)GetStockObject(WHITE_BRUSH));
 
-	for (int y = 0; y < BOARD_SIZE; ++y) {
-		for (int x = 0; x < BOARD_SIZE; ++x) {
-			RECT rect = { x * cellWidth, y * cellHeight, (x + 1) * cellWidth, (y + 1) * cellHeight };
-			HBRUSH hBrush = CreateSolidBrush((x + y) % 2 == 0 ? RGB(255, 255, 255) : RGB(230, 230, 230));
-			FillRect(memDC, &rect, hBrush);
-			DeleteObject(hBrush);
-		}
-	}
+    int cellWidth = width / WORLD_WIDTH;
+    int cellHeight = height / WORLD_HEIGHT;
 
-	for (auto& [id, pos] : g_players) {
-		HBRUSH hBrush = CreateSolidBrush(id == g_my_id ? RGB(255, 0, 0) : RGB(0, 0, 255));
-		HBRUSH oldB = (HBRUSH)SelectObject(memDC, hBrush);
-		int padX = cellWidth * 15 / 100;
-		int padY = cellHeight * 15 / 100;
-		Ellipse(memDC, pos.x * cellWidth + padX, pos.y * cellHeight + padY, 
-			(pos.x + 1) * cellWidth - padX, (pos.y + 1) * cellHeight - padY);
-		SelectObject(memDC, oldB);
-		DeleteObject(hBrush);
-	}
+    // Checkerboard
+    for (int y = 0; y < WORLD_HEIGHT; ++y) {
+        for (int x = 0; x < WORLD_WIDTH; ++x) {
+            if (g_hBoardBmp) {
+                int srcX = (x + y) % 2 == 0 ? 5 : 69;
+                int srcY = 5;
+                StretchBlt(memDC, x * cellWidth, y * cellHeight, cellWidth, cellHeight, boardDC, srcX, srcY, 65, 65, SRCCOPY);
+            } else {
+                RECT rect = { x * cellWidth, y * cellHeight, (x + 1) * cellWidth, (y + 1) * cellHeight };
+                HBRUSH hBrush = CreateSolidBrush((x + y) % 2 == 0 ? RGB(255, 255, 255) : RGB(230, 230, 230));
+                FillRect(memDC, &rect, hBrush);
+                DeleteObject(hBrush);
+            }
+        }
+    }
 
-	BitBlt(hdc, 0, 0, width, height, memDC, 0, 0, SRCCOPY);
-	SelectObject(memDC, oldBitmap);
-	DeleteObject(memBitmap);
-	DeleteDC(memDC);
-	ReleaseDC(hWnd, hdc);
+    // Players
+    for (auto& [id, player] : g_players) {
+        HBRUSH hBrush = CreateSolidBrush(id == g_my_id ? RGB(255, 0, 0) : RGB(0, 0, 255));
+        HBRUSH oldB = (HBRUSH)SelectObject(memDC, hBrush);
+        
+        int padX = cellWidth * 15 / 100;
+        int padY = cellHeight * 15 / 100;
+        
+        int px = player.x * cellWidth + padX;
+        int py = player.y * cellHeight + padY;
+        int pr = (player.x + 1) * cellWidth - padX;
+        int pb = (player.y + 1) * cellHeight - padY;
+
+        Ellipse(memDC, px, py, pr, pb);
+        
+        // Draw Name
+        SetBkMode(memDC, TRANSPARENT);
+        std::wstring wname(player.name.begin(), player.name.end());
+        TextOut(memDC, px, py - 20, wname.c_str(), (int)wname.length());
+
+        SelectObject(memDC, oldB);
+        DeleteObject(hBrush);
+    }
+
+    BitBlt(hdc, 0, 0, width, height, memDC, 0, 0, SRCCOPY);
+    
+    if (g_hBoardBmp) SelectObject(boardDC, oldBoardBmp);
+    DeleteDC(boardDC);
+
+    SelectObject(memDC, oldBitmap);
+    DeleteObject(memBitmap);
+    DeleteDC(memDC);
+    ReleaseDC(hWnd, hdc);
 }
 
 LRESULT CALLBACK window_proc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) {
-	switch (message) {
-	case WM_KEYDOWN: {
-		switch (wParam) {
-		case VK_UP: case VK_DOWN: case VK_LEFT: case VK_RIGHT: {
-			CSMovePacket p;
-			p.size = sizeof(p); p.type = PacketType::CS_Move;
-			p.dir.x = (wParam == VK_LEFT) ? -1 : (wParam == VK_RIGHT) ? 1 : 0;
-			p.dir.y = (wParam == VK_UP) ? -1 : (wParam == VK_DOWN) ? 1 : 0;
-			send_packet(&p, sizeof(p));
-			break;
-		}
-		case VK_ESCAPE: isRunning = false; break;
-		}
-		return 0;
-	}
-	case WM_DESTROY: isRunning = false; PostQuitMessage(0); return 0;
-	}
-	return DefWindowProc(hWnd, message, wParam, lParam);
+    switch (message) {
+    case WM_KEYDOWN: {
+        int16_t dx = 0, dy = 0;
+        switch (wParam) {
+        case VK_LEFT:  dx = -1; break;
+        case VK_RIGHT: dx = 1; break;
+        case VK_UP:    dy = -1; break;
+        case VK_DOWN:  dy = 1; break;
+        case VK_ESCAPE: isRunning = false; break;
+        }
+        if (dx != 0 || dy != 0) {
+            c2s_move p;
+            p.size = sizeof(p);
+            p.type = packet_type::C2S_MOVE;
+            p.dir.x = dx;
+            p.dir.y = dy;
+            send_packet(&p);
+        }
+        return 0;
+    }
+    case WM_DESTROY: isRunning = false; PostQuitMessage(0); return 0;
+    }
+    return DefWindowProc(hWnd, message, wParam, lParam);
 }
 
 int WINAPI WinMain(HINSTANCE hI, HINSTANCE hP, LPSTR lp, int nS) {
-	const wchar_t CLASS_NAME[] = L"ServerTestWindowClass";
-	WNDCLASS wc = {}; wc.lpfnWndProc = window_proc; wc.hInstance = hI; wc.lpszClassName = CLASS_NAME;
-	wc.hCursor = LoadCursor(NULL, IDC_ARROW); RegisterClass(&wc);
+    const wchar_t CLASS_NAME[] = L"ServerTestWindowClass";
+    WNDCLASS wc = {}; 
+    wc.lpfnWndProc = window_proc; 
+    wc.hInstance = hI; 
+    wc.lpszClassName = CLASS_NAME;
+    wc.hCursor = LoadCursor(NULL, IDC_ARROW); 
+    RegisterClass(&wc);
 
-	HWND hWnd = CreateWindowEx(0, CLASS_NAME, L"Server Test Client - PKJ", WS_OVERLAPPEDWINDOW,
-		CW_USEDEFAULT, CW_USEDEFAULT, 600, 600, NULL, NULL, hI, NULL);
+    HWND hWnd = CreateWindowEx(0, CLASS_NAME, L"Chess Client - PKJ", WS_OVERLAPPEDWINDOW,
+        CW_USEDEFAULT, CW_USEDEFAULT, 600, 600, NULL, NULL, hI, NULL);
 
-	AllocConsole();
-	FILE* f; 
-	freopen_s(&f, "CONIN$", "r", stdin);
-	freopen_s(&f, "CONOUT$", "w", stdout);
-	freopen_s(&f, "CONOUT$", "w", stderr);
+    AllocConsole();
+    FILE* f;
+    freopen_s(&f, "CONIN$", "r", stdin);
+    freopen_s(&f, "CONOUT$", "w", stdout);
+    freopen_s(&f, "CONOUT$", "w", stderr);
 
-	std::cout << "Server IP (Default 127.0.0.1): ";
-	std::string input_ip;
-	std::getline(std::cin, input_ip);
-	if (!input_ip.empty()) SERVER_IP = input_ip;
+    std::cout << "Enter username: ";
+    std::getline(std::cin, g_username);
+    if (g_username.length() >= MAX_NAME_LEN) g_username = g_username.substr(0, MAX_NAME_LEN - 1);
 
-	WSADATA wsa; WSAStartup(MAKEWORD(2, 2), &wsa);
-	g_socket = WSASocket(AF_INET, SOCK_STREAM, IPPROTO_TCP, nullptr, 0, 0);
-	SOCKADDR_IN addr{}; addr.sin_family = AF_INET; addr.sin_port = htons(SERVER_PORT);
-	inet_pton(AF_INET, SERVER_IP.c_str(), &addr.sin_addr);
+    g_hBoardBmp = (HBITMAP)LoadImage(NULL, L"chessmap.bmp", IMAGE_BITMAP, 0, 0, LR_LOADFROMFILE);
 
-	if (connect(g_socket, (sockaddr*)&addr, sizeof(addr)) == SOCKET_ERROR) {
-		error_display(L"Connect Fail", WSAGetLastError());
-		return 0;
-	}
+    WSADATA wsa; WSAStartup(MAKEWORD(2, 2), &wsa);
+    g_socket = WSASocket(AF_INET, SOCK_STREAM, IPPROTO_TCP, nullptr, 0, 0);
+    
+    // Set non-blocking
+    unsigned long arg = 1;
+    ioctlsocket(g_socket, FIONBIO, &arg);
 
-	CSLoginPacket login_packet; 
-	login_packet.size = sizeof(login_packet);
-	login_packet.type = PacketType::CS_Login;
-	send_packet(&login_packet, sizeof(login_packet));
+    SOCKADDR_IN addr{}; 
+    addr.sin_family = AF_INET; 
+    addr.sin_port = htons(PORT);
+    inet_pton(AF_INET, "127.0.0.1", &addr.sin_addr);
 
-	ShowWindow(hWnd, nS);
-	lastTime = std::chrono::steady_clock::now();
-	MSG msg = {};
-	while (isRunning) {
-		if (PeekMessage(&msg, NULL, 0, 0, PM_REMOVE)) {
-			TranslateMessage(&msg); DispatchMessage(&msg);
-		}
-		else {
-			process_network();
-			render(hWnd);
-			Sleep(10);
-		}
-	}
-	WSACleanup();
-	return 0;
+    connect(g_socket, (sockaddr*)&addr, sizeof(addr));
+    // Since it's non-blocking, connect might return WSAEWOULDBLOCK.
+    // For simplicity, we'll just proceed and let the first send/recv handle it.
+
+    c2s_login login_pkt;
+    login_pkt.size = sizeof(login_pkt);
+    login_pkt.type = packet_type::C2S_LOGIN;
+    strcpy_s(login_pkt.userName, g_username.c_str());
+    send_packet(&login_pkt);
+
+    ShowWindow(hWnd, nS);
+    
+    MSG msg = {};
+    while (isRunning) {
+        if (PeekMessage(&msg, NULL, 0, 0, PM_REMOVE)) {
+            TranslateMessage(&msg); 
+            DispatchMessage(&msg);
+        } else {
+            process_network();
+            render(hWnd);
+        }
+    }
+    
+    if (g_socket != INVALID_SOCKET) closesocket(g_socket);
+    WSACleanup();
+    return 0;
 }
