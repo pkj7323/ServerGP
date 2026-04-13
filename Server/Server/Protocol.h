@@ -2,8 +2,8 @@
 #include <cstdint>
 
 constexpr short PORT = 9001;
-constexpr int WORLD_WIDTH = 8;
-constexpr int WORLD_HEIGHT = 8;
+constexpr int WORLD_WIDTH = 400;
+constexpr int WORLD_HEIGHT = 400;
 constexpr int MAX_PLAYERS = 10;
 constexpr int MAX_NAME_LEN = 20;
 

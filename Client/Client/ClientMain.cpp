@@ -1,7 +1,9 @@
+#define NOMINMAX
 #include <ws2tcpip.h>
 #include <windows.h>
 #pragma comment(lib, "ws2_32.lib")
 
+#include <algorithm>
 #include <chrono>
 #include <string>
 #include <iostream>
@@ -25,8 +27,10 @@ HBITMAP g_hBoardBmp = NULL;
 
 // Constants for rendering
 constexpr int CELL_SIZE = 65;
-constexpr int WINDOW_WIDTH = WORLD_WIDTH * CELL_SIZE;
-constexpr int WINDOW_HEIGHT = WORLD_HEIGHT * CELL_SIZE;
+constexpr int VIEW_WIDTH = 16;
+constexpr int VIEW_HEIGHT = 16;
+constexpr int WINDOW_WIDTH = VIEW_WIDTH * CELL_SIZE;
+constexpr int WINDOW_HEIGHT = VIEW_HEIGHT * CELL_SIZE;
 
 void error_display(const std::wstring& msg, int err_no) {
     WCHAR* lpMsgBuf;
@@ -141,19 +145,36 @@ void render(HWND hWnd) {
     // Background
     FillRect(memDC, &clientRect, (HBRUSH)GetStockObject(WHITE_BRUSH));
 
-    int cellWidth = width / WORLD_WIDTH;
-    int cellHeight = height / WORLD_HEIGHT;
+    int cellWidth = width / VIEW_WIDTH;
+    int cellHeight = height / VIEW_HEIGHT;
+
+    // Viewport calculation (Centered on player, clamped to world bounds)
+    int left_x = 0, top_y = 0;
+    if (g_players.contains(g_my_id)) {
+        left_x = g_players[g_my_id].x - VIEW_WIDTH / 2;
+        top_y = g_players[g_my_id].y - VIEW_HEIGHT / 2;
+
+        // Clamp to map boundaries
+        left_x = std::clamp(left_x, 0, WORLD_WIDTH - VIEW_WIDTH);
+        top_y = std::clamp(top_y, 0, WORLD_WIDTH - VIEW_WIDTH);
+    }
 
     // Checkerboard
-    for (int y = 0; y < WORLD_HEIGHT; ++y) {
-        for (int x = 0; x < WORLD_WIDTH; ++x) {
+    for (int y = 0; y < VIEW_HEIGHT; ++y) {
+        for (int x = 0; x < VIEW_WIDTH; ++x) {
+            int world_x = left_x + x;
+            int world_y = top_y + y;
+
+            if (world_x < 0 || world_x >= WORLD_WIDTH || world_y < 0 || world_y >= WORLD_HEIGHT)
+                continue;
+
             if (g_hBoardBmp) {
-                int srcX = (x + y) % 2 == 0 ? 5 : 69;
+                int srcX = (world_x / 3 + world_y / 3) % 2 == 0 ? 5 : 69;
                 int srcY = 5;
                 StretchBlt(memDC, x * cellWidth, y * cellHeight, cellWidth, cellHeight, boardDC, srcX, srcY, 65, 65, SRCCOPY);
             } else {
                 RECT rect = { x * cellWidth, y * cellHeight, (x + 1) * cellWidth, (y + 1) * cellHeight };
-                HBRUSH hBrush = CreateSolidBrush((x + y) % 2 == 0 ? RGB(255, 255, 255) : RGB(230, 230, 230));
+                HBRUSH hBrush = CreateSolidBrush((world_x + world_y) % 2 == 0 ? RGB(255, 255, 255) : RGB(230, 230, 230));
                 FillRect(memDC, &rect, hBrush);
                 DeleteObject(hBrush);
             }
@@ -162,26 +183,45 @@ void render(HWND hWnd) {
 
     // Players
     for (auto& [id, player] : g_players) {
-        HBRUSH hBrush = CreateSolidBrush(id == g_my_id ? RGB(255, 0, 0) : RGB(0, 0, 255));
-        HBRUSH oldB = (HBRUSH)SelectObject(memDC, hBrush);
-        
-        int padX = cellWidth * 15 / 100;
-        int padY = cellHeight * 15 / 100;
-        
-        int px = player.x * cellWidth + padX;
-        int py = player.y * cellHeight + padY;
-        int pr = (player.x + 1) * cellWidth - padX;
-        int pb = (player.y + 1) * cellHeight - padY;
+        int rel_x = player.x - left_x;
+        int rel_y = player.y - top_y;
 
-        Ellipse(memDC, px, py, pr, pb);
-        
-        // Draw Name
-        SetBkMode(memDC, TRANSPARENT);
-        std::wstring wname(player.name.begin(), player.name.end());
-        TextOut(memDC, px, py - 20, wname.c_str(), (int)wname.length());
+        if (rel_x >= 0 && rel_x < VIEW_WIDTH && rel_y >= 0 && rel_y < VIEW_HEIGHT) {
+            HBRUSH hBrush = CreateSolidBrush(id == g_my_id ? RGB(255, 0, 0) : RGB(0, 0, 255));
+            HBRUSH oldB = (HBRUSH)SelectObject(memDC, hBrush);
+            
+            int padX = cellWidth * 15 / 100;
+            int padY = cellHeight * 15 / 100;
+            
+            int px = rel_x * cellWidth + padX;
+            int py = rel_y * cellHeight + padY;
+            int pr = (rel_x + 1) * cellWidth - padX;
+            int pb = (rel_y + 1) * cellHeight - padY;
 
-        SelectObject(memDC, oldB);
-        DeleteObject(hBrush);
+            Ellipse(memDC, px, py, pr, pb);
+            
+            // Draw Name
+            SetBkMode(memDC, TRANSPARENT);
+            SetTextColor(memDC, RGB(255, 255, 0)); // Yellow
+            SetTextAlign(memDC, TA_CENTER);        // Center alignment
+
+            std::wstring wname(player.name.begin(), player.name.end());
+            int centerX = px + (pr - px) / 2;
+            TextOut(memDC, centerX, py - 20, wname.c_str(), (int)wname.length());
+
+            SetTextAlign(memDC, TA_LEFT); // Reset alignment for other text
+            SelectObject(memDC, oldB);
+            DeleteObject(hBrush);
+        }
+
+    }
+
+    // Status Text
+    if (g_players.contains(g_my_id)) {
+        wchar_t status[128];
+        swprintf_s(status, L"Pos: (%d, %d)", g_players[g_my_id].x, g_players[g_my_id].y);
+        SetTextColor(memDC, RGB(0, 0, 0));
+        TextOut(memDC, 10, 10, status, (int)wcslen(status));
     }
 
     BitBlt(hdc, 0, 0, width, height, memDC, 0, 0, SRCCOPY);
@@ -258,8 +298,6 @@ int WINAPI WinMain(HINSTANCE hI, HINSTANCE hP, LPSTR lp, int nS) {
     inet_pton(AF_INET, "127.0.0.1", &addr.sin_addr);
 
     connect(g_socket, (sockaddr*)&addr, sizeof(addr));
-    // Since it's non-blocking, connect might return WSAEWOULDBLOCK.
-    // For simplicity, we'll just proceed and let the first send/recv handle it.
 
     c2s_login login_pkt;
     login_pkt.size = sizeof(login_pkt);
