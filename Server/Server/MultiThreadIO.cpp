@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "Protocol.h"
+#include <tbb/concurrent_unordered_map.h>
 
 void error_display(const std::wstring& msg, int err_no)
 {
@@ -83,7 +84,7 @@ public:
 	}
 	int do_recv()
 	{
-		return recv(client_, recv_buffer_ + prev_recv_count_,1024 - prev_recv_count_, 0);
+		return recv(client_, recv_buffer_ + prev_recv_count_, 1024 - prev_recv_count_, 0);
 	}
 	int do_send(int num_bytes, char* mess)
 	{
@@ -127,7 +128,7 @@ public:
 	void send_already_spawn_players();
 };
 
-std::unordered_map<int, std::shared_ptr<SESSION>> clients;
+tbb::concurrent_unordered_map<int, std::atomic<std::shared_ptr<SESSION>>> clients;
 
 
 
@@ -167,9 +168,10 @@ void SESSION::proccess_packet(unsigned char* buff)
 		std::cout << "Player[" << id_ << "] moved to (" << x_ << ", " << y_ << ")\n";
 		for (auto& [id, session] : clients)
 		{
-			if (nullptr == session) continue;
-			if (client_state::playing == session->state_)
-				session->send_move_packet(id_);
+			std::shared_ptr<SESSION> o = session.load();
+			if (nullptr == o) continue;
+			if (client_state::playing == o->state_)
+				o->send_move_packet(id_);
 		}
 		break;
 	}
@@ -239,9 +241,10 @@ void broadcast_player_remove_packet(int player_id)
 	{
 		if (id != player_id)
 		{
-			if (nullptr == session) continue;
-			if (client_state::playing == session->state_)
-				session->send_remove_player(player_id);
+			std::shared_ptr<SESSION> o = session;
+			if (nullptr == o) continue;
+			if (client_state::playing == o->state_)
+				o->send_remove_player(player_id);
 		}
 	}
 }
@@ -270,9 +273,65 @@ void client_disconnect(int client_id)
 		closesocket(cl->client_);
 		cl->client_ = INVALID_SOCKET;
 	}
-	clients[client_id] = nullptr;
+	clients[client_id].store(nullptr);
 }
 
+void worker_thread(int client_id)
+{
+	auto session = clients[client_id].load();
+	while (true)
+	{
+		int r_ret = session->do_recv();
+		if (r_ret > 0) {
+			std::cout << "Received " << r_ret << " bytes from ID: " << session->id_ << "\n";
+
+			if (nullptr == session)
+			{
+				client_disconnect(session->id_);
+				return;
+			}
+			unsigned char* p = reinterpret_cast<unsigned char*>(session->recv_buffer_);
+			int data_size = r_ret + session->prev_recv_count_;
+			while (data_size > 0)
+			{
+				unsigned char packet_size = p[0];
+				if (packet_size > data_size)
+				{
+					break;
+				}
+				session->proccess_packet(p);
+				p += packet_size;
+				data_size -= packet_size;
+			}
+			if (data_size > 0)
+			{
+				memmove(session->recv_buffer_, p, data_size);
+				session->prev_recv_count_ = data_size;
+			}
+			else
+			{
+				session->prev_recv_count_ = 0;
+			}
+		}
+		else if (r_ret == 0) {
+			// 클라이언트가 정상 종료함
+			std::cout << "Client Disconnected. ID: " << session->id_ << "\n";
+			client_disconnect(session->id_);
+		}
+		else {
+			int err = WSAGetLastError();
+			if (err == WSAEWOULDBLOCK) {
+				// 수신할 데이터가 없음: 그냥 다음 클라이언트로 넘어감
+			}
+			else {
+				// 진짜 에러 발생 (연결 강제 종료 등)
+				std::cout << "Client Error. ID: " << session->id_ << "\n";
+				client_disconnect(session->id_);
+				return;
+			}
+		}
+	}
+}
 
 int main()
 {
@@ -281,9 +340,6 @@ int main()
 	WSAStartup(MAKEWORD(2, 2), &WSAData);
 	server_socket = socket(AF_INET, SOCK_STREAM, 0);
 
-	unsigned long non_blocking = 1;
-	ioctlsocket(server_socket, FIONBIO, &non_blocking);
-
 	SOCKADDR_IN server_addr{};
 	server_addr.sin_family = AF_INET;
 	server_addr.sin_port = htons(PORT);
@@ -291,89 +347,37 @@ int main()
 	int64_t ret = bind(server_socket, reinterpret_cast<sockaddr*>(&server_addr), sizeof(server_addr));
 	listen(server_socket, SOMAXCONN);
 
+	std::vector<std::thread> worker_threads;
 	while (true) {
 		SOCKADDR_IN c_addr;
 		int len = sizeof(c_addr);
 		SOCKET client_sock = accept(server_socket, (sockaddr*)&c_addr, &len);
 
 		if (client_sock != INVALID_SOCKET) {
-			ioctlsocket(client_sock, FIONBIO, &non_blocking);
 			int id = player_index++;
 			auto session = std::make_shared<SESSION>();
 			session->client_ = client_sock;
 			session->id_ = id;
 			clients[id] = session;
-			std::cout << "New Client Connected! ID: " << id << "\n";
+			worker_threads.emplace_back(worker_thread, id);
 		}
 		else {
 			int err = WSAGetLastError();
 			if (err != WSAEWOULDBLOCK)
 			{
 				error_display(L"Accept Error: ", err);
-			}
-		}
-
-		for (auto it = clients.begin(); it != clients.end(); ) {
-			auto& session = it->second;
-			int r_ret = session->do_recv();
-
-			if (r_ret > 0) {
-				std::cout << "Received " << r_ret << " bytes from ID: " << session->id_ << "\n";
-
-				if (nullptr == session)
-				{
-					client_disconnect(session->id_);
-					continue;
-				}
-				unsigned char* p = reinterpret_cast<unsigned char*>(session->recv_buffer_);
-				int data_size = r_ret + session->prev_recv_count_;
-				while (data_size > 0)
-				{
-					unsigned char packet_size = p[0];
-					if (packet_size > data_size)
-					{
-						break;
-					}
-					session->proccess_packet(p);
-					p += packet_size;
-					data_size -= packet_size;
-				}
-				if (data_size > 0)
-				{
-					memmove(session->recv_buffer_, p, data_size);
-					session->prev_recv_count_ = data_size;
-				}
-				else
-				{
-					session->prev_recv_count_ = 0;
-				}
-
-				++it;
-			}
-			else if (r_ret == 0) {
-				// 클라이언트가 정상 종료함
-				std::cout << "Client Disconnected. ID: " << session->id_ << "\n";
-				client_disconnect(session->id_);
-				it = clients.erase(it);
-			}
-			else {
-				int err = WSAGetLastError();
-				if (err == WSAEWOULDBLOCK) {
-					// 수신할 데이터가 없음: 그냥 다음 클라이언트로 넘어감
-					++it;
-				}
-				else {
-					// 진짜 에러 발생 (연결 강제 종료 등)
-					std::cout << "Client Error. ID: " << session->id_ << "\n";
-					client_disconnect(session->id_);
-					it = clients.erase(it);
-				}
+				break;
 			}
 		}
 
 		Sleep(1);
 	}
 
+	for (auto& t : worker_threads)
+	{
+		if (t.joinable())
+			t.join();
+	}
 	closesocket(server_socket);
 	WSACleanup();
 }
