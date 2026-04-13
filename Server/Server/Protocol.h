@@ -4,7 +4,7 @@
 constexpr short PORT = 9001;
 constexpr int WORLD_WIDTH = 400;
 constexpr int WORLD_HEIGHT = 400;
-constexpr int MAX_PLAYERS = 10;
+constexpr int MAX_PLAYERS = 1000;
 constexpr int MAX_NAME_LEN = 20;
 
 enum class packet_type : uint16_t

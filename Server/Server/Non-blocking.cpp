@@ -311,6 +311,10 @@ int main()
 		SOCKET client_sock = accept(server_socket, (sockaddr*)&c_addr, &len);
 
 		if (client_sock != INVALID_SOCKET) {
+			if (clients.size() >= MAX_PLAYERS) {
+				closesocket(client_sock);
+				continue;
+			}
 			ioctlsocket(client_sock, FIONBIO, &non_blocking);
 			int id = player_index++;
 			auto session = std::make_shared<SESSION>();
@@ -320,6 +324,7 @@ int main()
 			session->x_ = rand() % WORLD_WIDTH;
 			session->y_ = rand() % WORLD_HEIGHT;
 			clients[id] = session;
+			session->send_login_success();
 			//std::cout << "New Client Connected! ID: " << id << "\n";
 		}
 		else {

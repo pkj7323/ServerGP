@@ -370,15 +370,23 @@ int main()
 	while (true) {
 		SOCKADDR_IN c_addr;
 		int len = sizeof(c_addr);
-		SOCKET client_sock = accept(server_socket, (sockaddr*)&c_addr, &len);
 
+		SOCKET client_sock = accept(server_socket, (sockaddr*)&c_addr, &len);
+		if (clients.size() >= MAX_PLAYERS) {
+			closesocket(client_sock);
+			continue;
+		}
 		if (client_sock != INVALID_SOCKET) {
-			ioctlsocket(client_sock, FIONBIO, &non_blocking);
+			
 			int id = player_index++;
+			std::cout << "New Client Connected! Socket: " << id << "\n";
 			auto session = std::make_shared<SESSION>();
 			session->client_ = client_sock;
 			session->id_ = id;
+			session->x_ = rand() % WORLD_WIDTH;
+			session->y_ = rand() % WORLD_HEIGHT;
 			clients[id] = session;
+			session->send_login_success();
 			worker_threads.emplace_back(worker_thread, id);
 		}
 		else {
