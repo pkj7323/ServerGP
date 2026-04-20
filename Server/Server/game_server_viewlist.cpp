@@ -64,6 +64,8 @@ public:
 
 void broadcast_new_player(int new_player_id);
 void broadcast_player_remove_packet(int player_id);
+void client_disconnect(int client_id);
+
 enum class client_state
 {
 	connected,
@@ -131,7 +133,7 @@ public:
 		WSASend(client_, &o->wsabuffer, 1, 0, 0, &o->over, nullptr);
 	}
 
-	void proccess_packet(unsigned char* buff);
+	bool proccess_packet(unsigned char* buff);
 
 
 	void send_avatar_info()
@@ -183,7 +185,7 @@ public:
 tbb::concurrent_unordered_map<int, std::atomic<std::shared_ptr<SESSION>>> clients;
 
 
-void SESSION::proccess_packet(unsigned char* buff)
+bool SESSION::proccess_packet(unsigned char* buff)
 {
 	packet_type type = *reinterpret_cast<packet_type*>(&buff[1]);
 	switch (type)
@@ -275,8 +277,10 @@ void SESSION::proccess_packet(unsigned char* buff)
 
 	default:
 		std::cout << "Unknown Packet Type from Client[" << id_ << "]" << std::endl;
+		return false;
 		break;
 	}
+	return true;
 
 }
 
@@ -354,10 +358,6 @@ void broadcast_player_remove_packet(int player_id)
 		{
 			std::shared_ptr<SESSION> o = clients[id].load();
 			if (nullptr == o) continue;
-			if (false == o->is_visible(removed_player->x_, removed_player->y_))
-			{
-				continue;
-			}
 			if (client_state::playing == o->state_)
 				o->send_remove_player(player_id);
 		}
@@ -457,6 +457,7 @@ void worker_thread()
 			}
 			unsigned char* p = reinterpret_cast<unsigned char*>(o->buff);
 			int data_size = num_bytes + cl->prev_recv_count_;
+			bool packet_valid = true;
 			while (data_size > 0)
 			{
 				unsigned char packet_size = p[0];
@@ -464,9 +465,18 @@ void worker_thread()
 				{
 					break;
 				}
-				cl->proccess_packet(p);
+				packet_valid = cl->proccess_packet(p);
+				if (!packet_valid)
+				{
+					client_disconnect(id);
+					break;
+				}
 				p += packet_size;
 				data_size -= packet_size;
+			}
+			if (!packet_valid)
+			{
+				break;
 			}
 			if (data_size > 0)
 			{
