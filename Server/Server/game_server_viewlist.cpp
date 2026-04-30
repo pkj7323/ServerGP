@@ -28,6 +28,21 @@ void error_display(const std::wstring& msg, int err_no)
 constexpr int BUF_SIZE = 1024;
 constexpr int VIEW_RANGE = 5;
 std::atomic<int> player_index = 1;
+std::atomic<int> npc_index = 1;
+
+constexpr int ID_TYPE_PLAYER = 0x00000000;
+constexpr int ID_TYPE_NPC = 0x40000000;
+constexpr int ID_INDEX_MASK = 0x3FFFFFFF;
+
+inline int make_player_id(int index)
+{
+	return ID_TYPE_PLAYER | (index & ID_INDEX_MASK);
+}
+
+inline int make_npc_id(int index)
+{
+	return ID_TYPE_NPC | (index & ID_INDEX_MASK);
+}
 HANDLE h_iocp;
 SOCKET server_socket;
 enum class io_type
@@ -228,7 +243,7 @@ bool SESSION::proccess_packet(unsigned char* buff)
 		broadcast_new_player(id_);
 
 		// Spawn a test NPC next to the player
-		int npc_id = 2000 + id_; // Temporary NPC ID
+		int npc_id = make_npc_id(npc_index++);
 		auto test_npc = std::make_shared<NPC>();
 		test_npc->id_ = npc_id;
 		test_npc->x_ = player_->x_ + 1;
@@ -486,7 +501,7 @@ void worker_thread()
 		case io_type::accept:
 		{
 			//std::cout << "New Client Connected!" << std::endl;
-			int current_id = player_index++;
+			int current_id = make_player_id(player_index++);
 			CreateIoCompletionPort((HANDLE)o->accept_socket, h_iocp, current_id, 0);
 			std::shared_ptr<SESSION> new_session = std::make_shared<SESSION>();
 			new_session->id_ = current_id;

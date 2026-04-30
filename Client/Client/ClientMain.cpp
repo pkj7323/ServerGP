@@ -27,8 +27,20 @@ bool isRunning = true;
 std::string g_username;
 HBITMAP g_hBoardBmp = NULL;
 
-// GUID Type Flags
+// ID Type Flags
+constexpr int ID_TYPE_PLAYER = 0x00000000;
 constexpr int ID_TYPE_NPC = 0x40000000;
+constexpr int ID_INDEX_MASK = 0x3FFFFFFF;
+
+static bool is_npc_id(int id)
+{
+	return (id & ~ID_INDEX_MASK) == ID_TYPE_NPC;
+}
+
+static bool is_player_id(int id)
+{
+	return (id & ~ID_INDEX_MASK) == ID_TYPE_PLAYER;
+}
 
 // Constants for rendering
 constexpr int CELL_SIZE = 65;
@@ -71,6 +83,7 @@ void process_packet(char* ptr) {
 	}
 	case packet_type::S2C_AVATAR_INFO: {
 		s2c_avatar_info* p = reinterpret_cast<s2c_avatar_info*>(ptr);
+		if (!is_player_id(p->id)) break;
 		g_my_id = p->id;
 		g_players[g_my_id] = { p->id, g_username, p->x, p->y };
 		std::cout << "Avatar Info: ID=" << g_my_id << " at (" << p->x << ", " << p->y << ")\n";
@@ -78,14 +91,16 @@ void process_packet(char* ptr) {
 	}
 	case packet_type::S2C_ADD_PLAYER: {
 		s2c_add_player* p = reinterpret_cast<s2c_add_player*>(ptr);
+		if (!is_player_id(p->id)) break;
 		if (p->id == g_my_id) break;
-		g_players[p->id] = { p->id, p->userName, p->x, p->y };
+		g_players.emplace(p->id, Object{ p->id, p->userName, p->x, p->y });
 		std::cout << "Add Player: ID=" << p->id << ", Name=" << p->userName << " at (" << p->x << ", " << p->y << ")\n";
 		break;
 	}
 	case packet_type::S2C_PLAYER_MOVE: {
 		s2c_player_move* p = reinterpret_cast<s2c_player_move*>(ptr);
-		if (g_players.count(p->id)) {
+		if (!is_player_id(p->id)) break;
+		if (g_players.contains(p->id)) {
 			g_players[p->id].x = p->x;
 			g_players[p->id].y = p->y;
 		}
@@ -93,19 +108,22 @@ void process_packet(char* ptr) {
 	}
 	case packet_type::S2C_REMOVE_PLAYER: {
 		s2c_remove_player* p = reinterpret_cast<s2c_remove_player*>(ptr);
+		if (!is_player_id(p->id)) break;
 		g_players.erase(p->id);
 		std::cout << "Remove Player: ID=" << p->id << "\n";
 		break;
 	}
 	case packet_type::S2C_ADD_NPC: {
 		s2c_add_npc* p = reinterpret_cast<s2c_add_npc*>(ptr);
+		if (!is_npc_id(p->id)) break;
 		g_npcs[p->id] = { p->id, p->npcName, p->x, p->y };
 		std::cout << "Add NPC: ID=" << p->id << ", Name=" << p->npcName << " at (" << p->x << ", " << p->y << ")\n";
 		break;
 	}
 	case packet_type::S2C_NPC_MOVE: {
 		s2c_npc_move* p = reinterpret_cast<s2c_npc_move*>(ptr);
-		if (g_npcs.count(p->id)) {
+		if (!is_npc_id(p->id)) break;
+		if (g_npcs.contains(p->id)) {
 			g_npcs[p->id].x = p->x;
 			g_npcs[p->id].y = p->y;
 		}
@@ -113,6 +131,7 @@ void process_packet(char* ptr) {
 	}
 	case packet_type::S2C_REMOVE_NPC: {
 		s2c_remove_npc* p = reinterpret_cast<s2c_remove_npc*>(ptr);
+		if (!is_npc_id(p->id)) break;
 		g_npcs.erase(p->id);
 		std::cout << "Remove NPC: ID=" << p->id << "\n";
 		break;
