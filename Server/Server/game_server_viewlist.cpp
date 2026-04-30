@@ -27,6 +27,7 @@ void error_display(const std::wstring& msg, int err_no)
 }
 constexpr int BUF_SIZE = 1024;
 constexpr int VIEW_RANGE = 5;
+constexpr int MAX_NPC_COUNT = 200000;
 std::atomic<int> player_index = 1;
 std::atomic<int> npc_index = 1;
 
@@ -96,7 +97,7 @@ public:
 	char			userName_[MAX_NAME_LEN];
 
 	BaseObject() : id_(-1), x_{ 0 }, y_{ 0 }, userName_{} {}
-	virtual ~BaseObject() {}
+	virtual ~BaseObject() = default;
 };
 
 class Player : public BaseObject {
@@ -108,6 +109,8 @@ class NPC : public BaseObject {
 public:
 	NPC() : BaseObject() {}
 };
+
+tbb::concurrent_unordered_map<int, std::shared_ptr<NPC>> npcs;
 
 class SESSION {
 public:
@@ -221,10 +224,26 @@ public:
 		return abs(x - player_->x_) <= VIEW_RANGE && abs(y - player_->y_) <= VIEW_RANGE;
 	}
 	void send_already_spawn_players();
+	void send_already_spawn_npcs()
+	{
+		for (auto& [npc_id, npc] : npcs)
+		{
+			if (!npc) continue;
+			if (false == is_visible(npc->x_, npc->y_)) continue;
+			s2c_add_npc add_packet;
+			add_packet.size = sizeof(s2c_add_npc);
+			add_packet.type = packet_type::S2C_ADD_NPC;
+			add_packet.id = npc_id;
+			strncpy_s(add_packet.npcName, npc->userName_, MAX_NAME_LEN);
+			add_packet.x = npc->x_;
+			add_packet.y = npc->y_;
+			do_send(sizeof(s2c_add_npc), reinterpret_cast<char*>(&add_packet));
+		}
+	}
 };
 
 tbb::concurrent_unordered_map<int, std::atomic<std::shared_ptr<SESSION>>> clients;
-tbb::concurrent_unordered_map<int, std::shared_ptr<NPC>> npcs;
+
 
 
 bool SESSION::proccess_packet(unsigned char* buff)
@@ -240,26 +259,8 @@ bool SESSION::proccess_packet(unsigned char* buff)
 		state_ = client_state::playing;
 		send_avatar_info();
 		send_already_spawn_players();
+		send_already_spawn_npcs();
 		broadcast_new_player(id_);
-
-		// Spawn a test NPC next to the player
-		int npc_id = make_npc_id(npc_index++);
-		auto test_npc = std::make_shared<NPC>();
-		test_npc->id_ = npc_id;
-		test_npc->x_ = player_->x_ + 1;
-		test_npc->y_ = player_->y_;
-		strcpy_s(test_npc->userName_, "TestNPC");
-		npcs[npc_id] = test_npc;
-
-		// Send ADD_NPC to the current player
-		s2c_add_npc add_npc_pkt;
-		add_npc_pkt.size = sizeof(s2c_add_npc);
-		add_npc_pkt.type = packet_type::S2C_ADD_NPC;
-		add_npc_pkt.id = test_npc->id_;
-		add_npc_pkt.x = test_npc->x_;
-		add_npc_pkt.y = test_npc->y_;
-		strcpy_s(add_npc_pkt.npcName, test_npc->userName_);
-		do_send(add_npc_pkt.size, reinterpret_cast<char*>(&add_npc_pkt));
 		break;
 	}
 	case packet_type::C2S_MOVE:
@@ -464,6 +465,21 @@ void client_disconnect(int client_id)
 	clients[client_id].store(nullptr);
 }
 
+void npc_initialize()
+{
+	for (int i = 0; i < MAX_NPC_COUNT; ++i)
+	{
+		int npc_id = make_npc_id(npc_index++);
+		auto npc = std::make_shared<NPC>();
+		npc->id_ = npc_id;
+		npc->x_ = rand() % WORLD_WIDTH;
+		npc->y_ = rand() % WORLD_HEIGHT;
+		strcpy_s(npc->userName_, "NPC");
+		npcs[npc_id] = npc;
+	}
+}
+
+
 void worker_thread()
 {
 	while (true)
@@ -603,6 +619,7 @@ int main()
 	h_iocp = CreateIoCompletionPort(INVALID_HANDLE_VALUE, NULL, 0, 0);
 	CreateIoCompletionPort((HANDLE)server_socket, h_iocp, 0, 0);
 
+	npc_initialize();
 
 	EXP_OVER accept_over(io_type::accept);
 	accept_over.accept_socket = WSASocket(AF_INET, SOCK_STREAM, 0, NULL, 0, WSA_FLAG_OVERLAPPED);

@@ -4,9 +4,12 @@
 #pragma comment(lib, "WS2_32.lib")
 #include <MSWSock.h>
 #pragma comment(lib, "MSWSock.lib")
+#include <chrono>
 #include <set>
 #include <shared_mutex>
+#include <string>
 #include <vector>
+#include <ctime>
 
 #include "Protocol.h"
 #include <tbb/concurrent_unordered_map.h>
@@ -30,7 +33,7 @@ void error_display(const std::wstring& msg, int err_no)
 constexpr int BUF_SIZE = 1024;
 constexpr int VIEW_RANGE = 5;
 constexpr int SECTOR_SIZE = 10;
-
+constexpr int MAX_NPC_COUNT = 20000;
 // ID Type Flags (Bit-masking)
 constexpr int ID_TYPE_PLAYER = 0x00000000; // Players start with 0
 constexpr int ID_TYPE_NPC    = 0x40000000; // NPCs have 30th bit set (starts from 1,073,741,824)
@@ -46,8 +49,18 @@ static int make_npc_id(int index)
 	return ID_TYPE_NPC | (index & ID_INDEX_MASK);
 }
 
+static bool is_npc_id(int id)
+{
+	return (id & ~ID_INDEX_MASK) == ID_TYPE_NPC;
+}
+
+static bool is_player_id(int id)
+{
+	return (id & ~ID_INDEX_MASK) == ID_TYPE_PLAYER;
+}
+
 std::atomic<int> player_index = 1;
-std::atomic<int> npc_index = 1;
+std::atomic<int> npc_index = 20000;
 
 HANDLE h_iocp;
 SOCKET server_socket;
@@ -168,8 +181,16 @@ public:
 
 class NPC : public BaseObject {
 public:
-	NPC() : BaseObject() {}
+	NPC() : BaseObject(), last_move_timestamp_(std::chrono::system_clock::now()) {}
+	std::chrono::time_point<std::chrono::system_clock> last_move_timestamp_; // NPC의 마지막 이동 시간 기록
+	void heart_beat()
+	{
+		x_ += (rand() % 3) - 1; // -1, 0, 1 중 랜덤 이동
+		y_ += (rand() % 3) - 1;
+	}
 };
+
+tbb::concurrent_unordered_map<int, std::shared_ptr<NPC>> npcs;
 
 enum class io_type
 {
@@ -328,7 +349,7 @@ public:
 };
 
 tbb::concurrent_unordered_map<int, std::atomic<std::shared_ptr<SESSION>>> clients;
-tbb::concurrent_unordered_map<int, std::shared_ptr<NPC>> npcs;
+
 
 Sector sector;
 
@@ -346,26 +367,6 @@ bool SESSION::proccess_packet(unsigned char* buff)
 		send_avatar_info();
 		send_already_spawn_players();
 		broadcast_new_player(id_);
-
-		// Spawn a test NPC next to the player
-		int npc_id = make_npc_id(npc_index++);
-		auto test_npc = std::make_shared<NPC>();
-		test_npc->id_ = npc_id;
-		test_npc->x_ = player_->x_ + 1;
-		test_npc->y_ = player_->y_;
-		strcpy_s(test_npc->userName_, "TestNPC");
-		npcs[npc_id] = test_npc;
-		sector.add_object(npc_id, test_npc->x_, test_npc->y_);
-
-		// Send ADD_NPC to the current player
-		s2c_add_npc add_npc_pkt;
-		add_npc_pkt.size = sizeof(s2c_add_npc);
-		add_npc_pkt.type = packet_type::S2C_ADD_NPC;
-		add_npc_pkt.id = test_npc->id_;
-		add_npc_pkt.x = test_npc->x_;
-		add_npc_pkt.y = test_npc->y_;
-		strcpy_s(add_npc_pkt.npcName, test_npc->userName_);
-		do_send(add_npc_pkt.size, reinterpret_cast<char*>(&add_npc_pkt));
 		break;
 	}
 	case packet_type::C2S_MOVE:
@@ -397,7 +398,7 @@ bool SESSION::proccess_packet(unsigned char* buff)
 			if (id == id_) continue;
 			
 			// NPCs check
-			if (npcs.count(id)) {
+			if (npcs.count(id) && is_npc_id(id)) {
 				auto npc = npcs[id];
 				if (is_visible(npc->x_, npc->y_)) {
 					new_visible_players.insert(id);
@@ -636,7 +637,21 @@ void client_disconnect(int client_id)
 	}
 	clients[client_id].store(nullptr);
 }
-
+void npc_initialize()
+{
+	for (int i = 0; i < MAX_NPC_COUNT; ++i)
+	{
+		int npc_id = make_npc_id(npc_index++);
+		auto npc = std::make_shared<NPC>();
+		npc->id_ = npc_id;
+		npc->x_ = rand() % WORLD_WIDTH;
+		npc->y_ = rand() % WORLD_HEIGHT;
+		std::string npc_name = "NPC_" + std::to_string(npc_id);
+		strcpy_s(npc->userName_, npc_name.c_str());
+		npcs[npc_id] = npc;
+		sector.add_object(npc_id, npc->x_, npc->y_); // 섹터에 NPC 추가
+	}
+}
 void worker_thread()
 {
 	while (true)
@@ -752,9 +767,55 @@ void worker_thread()
 	}
 }
 
+void npc_random_move()
+{
+	for (auto& [npc_id, npc] : npcs)
+	{
+		if (!npc) continue;
+		int16_t old_x = npc->x_;
+		int16_t old_y = npc->y_;
+		int16_t dx = (rand() % 3) - 1; // -1, 0, or 1
+		int16_t dy = (rand() % 3) - 1; // -1, 0, or 1
+		int16_t new_x = npc->x_ + dx;
+		int16_t new_y = npc->y_ + dy;
+		if (new_x >= 0 && new_x < WORLD_WIDTH)
+		{
+			npc->x_ = new_x;
+		}
+		if (new_y >= 0 && new_y < WORLD_HEIGHT)
+		{
+			npc->y_ = new_y;
+		}
+		sector.move_object(npc_id, old_x, old_y, npc->x_, npc->y_);
+	}
+}
+constexpr int MOVE_COOL_TIME = 1000; // NPC 이동 쿨타임 (밀리초)
+void ai_thread()
+{
+	using namespace std::chrono;
+	while (true)
+	{
+		auto current_time = system_clock::now();
+		for (auto& [npc_id, npc] : npcs)
+		{
+			if (!npc) continue;
+			if (duration_cast<milliseconds>(current_time - npc->last_move_timestamp_).count() >= MOVE_COOL_TIME)
+			{
+				npc_random_move();
+				npc->last_move_timestamp_ = current_time;
+				// NPC 이동 후, 해당 NPC를 볼 수 있는 플레이어들에게 이동 패
+			}
+		}
+		auto end_time = system_clock::now();
+		auto elapsed = duration_cast<milliseconds>(end_time - current_time).count();
+
+	}
+}
+
 int main()
 {
 	std::wcout.imbue(std::locale("korean"));
+	srand(static_cast<unsigned int>(time(NULL)));
 	WSADATA WSAData;
 	WSAStartup(MAKEWORD(2, 2), &WSAData);
 	server_socket = WSASocket(AF_INET, SOCK_STREAM, 0, NULL, 0, WSA_FLAG_OVERLAPPED);
@@ -771,6 +832,9 @@ int main()
 	h_iocp = CreateIoCompletionPort(INVALID_HANDLE_VALUE, NULL, 0, 0);
 	CreateIoCompletionPort((HANDLE)server_socket, h_iocp, 0, 0);
 
+	std::cout << "npc initializing..." << std::endl;
+	npc_initialize();
+	std::cout << "npc initialization complete. NPC Count: " << npcs.size() << std::endl;
 
 	EXP_OVER accept_over(io_type::accept);
 	accept_over.accept_socket = WSASocket(AF_INET, SOCK_STREAM, 0, NULL, 0, WSA_FLAG_OVERLAPPED);
