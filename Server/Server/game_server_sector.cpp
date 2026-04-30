@@ -33,7 +33,7 @@ void error_display(const std::wstring& msg, int err_no)
 constexpr int BUF_SIZE = 1024;
 constexpr int VIEW_RANGE = 5;
 constexpr int SECTOR_SIZE = 10;
-constexpr int MAX_NPC_COUNT = 20000;
+constexpr int MAX_NPC_COUNT = 40000;
 // ID Type Flags (Bit-masking)
 constexpr int ID_TYPE_PLAYER = 0x00000000; // Players start with 0
 constexpr int ID_TYPE_NPC    = 0x40000000; // NPCs have 30th bit set (starts from 1,073,741,824)
@@ -795,16 +795,25 @@ void ai_thread()
 	while (true)
 	{
 		auto current_time = system_clock::now();
+		int elapsed_time = 1000;
 		for (auto& [npc_id, npc] : npcs)
 		{
 			if (!npc) continue;
-			if (duration_cast<milliseconds>(current_time - npc->last_move_timestamp_).count() >= MOVE_COOL_TIME)
+			auto duration = duration_cast<milliseconds>(current_time - npc->last_move_timestamp_).count();
+			if (duration >= MOVE_COOL_TIME)
 			{
 				npc_random_move(npc_id);
 				npc->last_move_timestamp_ = current_time;
-				// NPC 이동 후, 해당 NPC를 볼 수 있는 플레이어들에게 이동 패
+				if (duration > elapsed_time)
+				{
+					elapsed_time++;
+				}
+				else 
+					elapsed_time--;
+				
 			}
 		}
+		std::cout << "AI Thread: NPCs moved. Elapsed Time: " << elapsed_time << " ms\n";
 		auto end_time = system_clock::now();
 		auto elapsed = duration_cast<milliseconds>(end_time - current_time).count();
 		
