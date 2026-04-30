@@ -39,6 +39,9 @@
     <ClCompile Include="game_server_sector.cpp">
       <Filter>소스 파일</Filter>
     </ClCompile>
+    <ClCompile Include="game_server_npc.cpp">
+      <Filter>소스 파일</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <None Include="packages.config" />
