@@ -1,4 +1,4 @@
-#pragma once
+ï»¿#pragma once
 #include <cstdint>
 
 constexpr short PORT = 9001;
@@ -18,6 +18,10 @@ enum class packet_type : uint16_t
 	S2C_ADD_PLAYER = 14,
 	S2C_PLAYER_MOVE = 15,
 	S2C_REMOVE_PLAYER = 16,
+
+	S2C_ADD_NPC = 20,
+	S2C_NPC_MOVE = 21,
+	S2C_REMOVE_NPC = 22,
 };
 #pragma pack(push, 1)
 struct packet_header
@@ -27,7 +31,7 @@ struct packet_header
 };
 
 //----------------------------------------------------------------------------
-// Å¬¶óÀÌ¾ğÆ® -> ¼­¹ö ÆĞÅ¶
+// í´ë¼ì´ì–¸íŠ¸ -> ì„œë²„ íŒ¨í‚·
 struct c2s_login : packet_header
 {
 	char userName[MAX_NAME_LEN];
@@ -43,7 +47,7 @@ struct c2s_move : packet_header
 };
 
 //-----------------------------------------------------------------------------
-// ¼­¹ö -> Å¬¶óÀÌ¾ğÆ® ÆĞÅ¶
+// ì„œë²„ -> í´ë¼ì´ì–¸íŠ¸ íŒ¨í‚·
 struct s2c_login_ack : packet_header
 {
 	bool success;
@@ -52,7 +56,7 @@ struct s2c_login_ack : packet_header
 
 struct s2c_avatar_info : packet_header
 {
-	int id; // ÇÃ·¹ÀÌ¾î ¾ÆÀÌµğ´Â Àû¾îµµ int32_t ÀÌ»óÀÌ¾î¾ß ÇÕ´Ï´Ù.
+	int id; // í”Œë ˆì´ì–´ ì•„ì´ë””ëŠ” ì ì–´ë„ int32_t ì´ìƒì´ì–´ì•¼ í•©ë‹ˆë‹¤.
 	int16_t x;
 	int16_t y;
 };
@@ -69,6 +73,25 @@ struct s2c_remove_player : packet_header
 	int id;
 };
 struct s2c_player_move : packet_header
+{
+	int id;
+	int16_t x;
+	int16_t y;
+	uint32_t timestamp;
+};
+
+struct s2c_add_npc : packet_header
+{
+	int id;
+	char npcName[MAX_NAME_LEN];
+	int16_t x;
+	int16_t y;
+};
+struct s2c_remove_npc : packet_header
+{
+	int id;
+};
+struct s2c_npc_move : packet_header
 {
 	int id;
 	int16_t x;

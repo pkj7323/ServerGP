@@ -30,9 +30,18 @@ void error_display(const std::wstring& msg, int err_no)
 constexpr int BUF_SIZE = 1024;
 constexpr int VIEW_RANGE = 5;
 constexpr int SECTOR_SIZE = 10;
+
+// ID Type Flags (Bit-masking)
+constexpr int ID_TYPE_PLAYER = 0x00000000; // Players start with 0
+constexpr int ID_TYPE_NPC    = 0x40000000; // NPCs have 30th bit set (starts from 1,073,741,824)
+
 std::atomic<int> player_index = 1;
+std::atomic<int> npc_index = 1;
+
 HANDLE h_iocp;
 SOCKET server_socket;
+
+
 struct cell {
 	std::unordered_set<int> objects;
 	std::shared_mutex mtx; // 섹터 전용 Read-Write Lock
@@ -53,11 +62,15 @@ public:
 			return; // 같은 섹터 내 이동이므로 업데이트 필요 없음
 		}
 		// 1. 이전 섹터에서 삭제
+		if (old_sector_x >= 0 && old_sector_x < WORLD_WIDTH / SECTOR_SIZE &&
+			old_sector_y >= 0 && old_sector_y < WORLD_HEIGHT / SECTOR_SIZE)
 		{
 			std::unique_lock<std::shared_mutex> lock(object_sector[old_sector_y][old_sector_x].mtx);
 			object_sector[old_sector_y][old_sector_x].objects.erase(object_id);
 		}
 		// 2. 새 섹터에 추가
+		if (new_sector_x >= 0 && new_sector_x < WORLD_WIDTH / SECTOR_SIZE &&
+			new_sector_y >= 0 && new_sector_y < WORLD_HEIGHT / SECTOR_SIZE)
 		{
 			std::unique_lock<std::shared_mutex> lock(object_sector[new_sector_y][new_sector_x].mtx);
 			object_sector[new_sector_y][new_sector_x].objects.insert(object_id);
@@ -68,16 +81,24 @@ public:
 	{
 		int sector_x = x / SECTOR_SIZE;
 		int sector_y = y / SECTOR_SIZE;
-		std::unique_lock<std::shared_mutex> lock(object_sector[sector_y][sector_x].mtx);
-		object_sector[sector_y][sector_x].objects.insert(object_id);
+		if (sector_x >= 0 && sector_x < WORLD_WIDTH / SECTOR_SIZE &&
+			sector_y >= 0 && sector_y < WORLD_HEIGHT / SECTOR_SIZE)
+		{
+			std::unique_lock<std::shared_mutex> lock(object_sector[sector_y][sector_x].mtx);
+			object_sector[sector_y][sector_x].objects.insert(object_id);
+		}
 	}
 
 	void remove_object(int object_id, int x, int y)
 	{
 		int sector_x = x / SECTOR_SIZE;
 		int sector_y = y / SECTOR_SIZE;
-		std::unique_lock<std::shared_mutex> lock(object_sector[sector_y][sector_x].mtx);
-		object_sector[sector_y][sector_x].objects.erase(object_id);
+		if (sector_x >= 0 && sector_x < WORLD_WIDTH / SECTOR_SIZE &&
+			sector_y >= 0 && sector_y < WORLD_HEIGHT / SECTOR_SIZE)
+		{
+			std::unique_lock<std::shared_mutex> lock(object_sector[sector_y][sector_x].mtx);
+			object_sector[sector_y][sector_x].objects.erase(object_id);
+		}
 	}
 
 
@@ -87,7 +108,6 @@ public:
 		int sector_y = y / SECTOR_SIZE;
 		std::vector<int> nearby_objects;
 
-		// [최적화 1] 메모리 재할당 방지
 		nearby_objects.reserve(AVERAGE_EXPECTED_OBJECTS);
 
 		for (int dy = -1; dy <= 1; ++dy)
@@ -100,10 +120,8 @@ public:
 				if (check_sector_x >= 0 && check_sector_x < WORLD_WIDTH / SECTOR_SIZE &&
 					check_sector_y >= 0 && check_sector_y < WORLD_HEIGHT / SECTOR_SIZE)
 				{
-					// [최적화 2] 락 변수명 변경 (가독성 및 섀도잉 방지)
 					std::shared_lock<std::shared_mutex> lock(object_sector[check_sector_y][check_sector_x].mtx);
 
-					// set의 요소들을 vector 끝에 일괄 삽입
 					nearby_objects.insert(
 						nearby_objects.end(),
 						object_sector[check_sector_y][check_sector_x].objects.begin(),
@@ -113,13 +131,33 @@ public:
 			}
 		}
 
-		// 복사 오버헤드 없이 안전하고 빠르게 반환됨 (NRVO 적용)
 		return nearby_objects;
 	}
 
 private:
 	std::array<std::array<cell, WORLD_WIDTH / SECTOR_SIZE>, WORLD_HEIGHT / SECTOR_SIZE> object_sector;
 	const int AVERAGE_EXPECTED_OBJECTS = 50;
+};
+
+class BaseObject {
+public:
+	int				id_;
+	int16_t 		x_;
+	int16_t 		y_;
+	char			userName_[MAX_NAME_LEN];
+
+	BaseObject() : id_(-1), x_{ 0 }, y_{ 0 }, userName_{} {}
+	virtual ~BaseObject() {}
+};
+
+class Player : public BaseObject {
+public:
+	Player() : BaseObject() {}
+};
+
+class NPC : public BaseObject {
+public:
+	NPC() : BaseObject() {}
 };
 
 enum class io_type
@@ -164,6 +202,7 @@ enum class client_state
 	playing,
 	logout
 };
+
 class SESSION {
 public:
 	SOCKET			client_;
@@ -172,18 +211,19 @@ public:
 	int				prev_recv_count_ = 0;
 	client_state	state_;
 
-	int16_t 		x_;
-	int16_t 		y_;
-	char			userName_[MAX_NAME_LEN];
+	std::shared_ptr<Player> player_;
+
 	std::unordered_set<int> visible_players; // 현재 보이는 플레이어 ID 목록
 	std::mutex visible_players_mutex; // 보이는 플레이어 목록 보호용 뮤텍스
-	SESSION() : x_{ 0 }, y_{ 0 }, userName_{}
+
+	SESSION()
 	{
 		prev_recv_count_ = 0;
 		state_ = client_state::connected;
 		id_ = 999;
 		client_ = INVALID_SOCKET;
 		recv_over_.type = io_type::recv;
+		player_ = std::make_shared<Player>();
 	}
 	~SESSION()
 	{
@@ -200,9 +240,12 @@ public:
 		id_ = 999;
 		closesocket(client_);
 		client_ = INVALID_SOCKET;
-		x_ = 0;
-		y_ = 0;
-		ZeroMemory(userName_, sizeof(userName_));
+		if (player_) {
+			player_->id_ = -1;
+			player_->x_ = 0;
+			player_->y_ = 0;
+			ZeroMemory(player_->userName_, sizeof(player_->userName_));
+		}
 		ZeroMemory(&recv_over_.over, sizeof(WSAOVERLAPPED));
 		recv_over_.type = io_type::recv;
 		recv_over_.wsabuffer.buf = recv_over_.buff; // 본인의 버퍼 주소로 재설정
@@ -212,7 +255,6 @@ public:
 	{
 		DWORD recv_flag = 0;
 		recv_over_.over = {};
-		// 남은 데이터(prev_recv_count) 뒤부터 이어 받도록 수정
 		recv_over_.wsabuffer.buf = recv_over_.buff + prev_recv_count_;
 		recv_over_.wsabuffer.len = BUF_SIZE - prev_recv_count_;
 		WSARecv(client_, &recv_over_.wsabuffer, 1, 0, &recv_flag, &recv_over_.over, nullptr);
@@ -234,8 +276,8 @@ public:
 		info_packet.size = sizeof(s2c_avatar_info);
 		info_packet.type = packet_type::S2C_AVATAR_INFO;
 		info_packet.id = id_;
-		info_packet.x = x_;
-		info_packet.y = y_;
+		info_packet.x = player_->x_;
+		info_packet.y = player_->y_;
 		do_send(sizeof(s2c_avatar_info), reinterpret_cast<char*>(&info_packet));
 	}
 
@@ -269,12 +311,13 @@ public:
 	void send_add_player(int player_id);
 	bool is_visible(int16_t x, int16_t y)
 	{
-		return abs(x - x_) <= VIEW_RANGE && abs(y - y_) <= VIEW_RANGE;
+		return abs(x - player_->x_) <= VIEW_RANGE && abs(y - player_->y_) <= VIEW_RANGE;
 	}
 	void send_already_spawn_players();
 };
 
 tbb::concurrent_unordered_map<int, std::atomic<std::shared_ptr<SESSION>>> clients;
+tbb::concurrent_unordered_map<int, std::shared_ptr<NPC>> npcs;
 
 Sector sector;
 
@@ -286,13 +329,32 @@ bool SESSION::proccess_packet(unsigned char* buff)
 	case packet_type::C2S_LOGIN:
 	{
 		c2s_login* p = reinterpret_cast<c2s_login*>(buff);
-		strncpy_s(userName_, p->userName, MAX_NAME_LEN);
-		//std::cout << "Client[" << id_ << "] Login: " << userName_ << std::endl;
+		strncpy_s(player_->userName_, p->userName, MAX_NAME_LEN);
 		state_ = client_state::playing;
-		sector.add_object(id_, x_, y_); // 섹터에 플레이어 추가
+		sector.add_object(id_, player_->x_, player_->y_); // 섹터에 플레이어 추가
 		send_avatar_info();
 		send_already_spawn_players();
 		broadcast_new_player(id_);
+
+		// Spawn a test NPC next to the player
+		int npc_id = 2000 + id_; // Temporary NPC ID
+		auto test_npc = std::make_shared<NPC>();
+		test_npc->id_ = npc_id;
+		test_npc->x_ = player_->x_ + 1;
+		test_npc->y_ = player_->y_;
+		strcpy_s(test_npc->userName_, "TestNPC");
+		npcs[npc_id] = test_npc;
+		sector.add_object(npc_id, test_npc->x_, test_npc->y_);
+
+		// Send ADD_NPC to the current player
+		s2c_add_npc add_npc_pkt;
+		add_npc_pkt.size = sizeof(s2c_add_npc);
+		add_npc_pkt.type = packet_type::S2C_ADD_NPC;
+		add_npc_pkt.id = test_npc->id_;
+		add_npc_pkt.x = test_npc->x_;
+		add_npc_pkt.y = test_npc->y_;
+		strcpy_s(add_npc_pkt.npcName, test_npc->userName_);
+		do_send(add_npc_pkt.size, reinterpret_cast<char*>(&add_npc_pkt));
 		break;
 	}
 	case packet_type::C2S_MOVE:
@@ -301,36 +363,44 @@ bool SESSION::proccess_packet(unsigned char* buff)
 		int16_t dx = packet->dir.x;
 		int16_t dy = packet->dir.y;
 
-		int16_t new_x = x_ + dx;
-		int16_t new_y = y_ + dy;
-		int16_t old_x = x_;
-		int16_t old_y = y_;
+		int16_t old_x = player_->x_;
+		int16_t old_y = player_->y_;
+		int16_t new_x = player_->x_ + dx;
+		int16_t new_y = player_->y_ + dy;
 		if (new_x >= 0 && new_x < WORLD_WIDTH)
 		{
-			x_ = new_x;
+			player_->x_ = new_x;
 		}
 		if (new_y >= 0 && new_y < WORLD_HEIGHT)
 		{
-			y_ = new_y;
+			player_->y_ = new_y;
 		}
-		sector.move_object(id_, old_x, old_y, x_, y_); // 섹터 정보 업데이트
+		sector.move_object(id_, old_x, old_y, player_->x_, player_->y_); // 섹터 정보 업데이트
 
-		auto old_view = visible_players; // 이전에 보이던 플레이어 목록을 저장
+		auto old_view = visible_players;
 
-		std::unordered_set<int> new_visible_players; // 새로 보이는 플레이어 목록
-		auto object_ids_nearby_sector = sector.get_objects_nearby_sector(x_, y_);
-		//std::cout << "Player[" << id_ << "] moved to (" << x_ << ", " << y_ << ")\n";
+		std::unordered_set<int> new_visible_players;
+		auto object_ids_nearby_sector = sector.get_objects_nearby_sector(player_->x_, player_->y_);
 		for (auto& id: object_ids_nearby_sector)
 		{
 			if (id == id_) continue;
+			
+			// NPCs check
+			if (npcs.count(id)) {
+				auto npc = npcs[id];
+				if (is_visible(npc->x_, npc->y_)) {
+					new_visible_players.insert(id);
+				}
+				continue;
+			}
+
+			// Players check
 			auto it = clients.find(id);
 			if (it == clients.end()) continue;
 			std::shared_ptr<SESSION> s = it->second.load();
-			if (nullptr == s) continue;
-
 			if (!s || s->state_ != client_state::playing) continue;
 
-			if (s->is_visible(x_, y_))
+			if (s->is_visible(player_->x_, player_->y_))
 			{
 				new_visible_players.insert(id);
 			}
@@ -341,26 +411,35 @@ bool SESSION::proccess_packet(unsigned char* buff)
 		{
 			if (!old_view.contains(id))
 			{
-				send_add_player(id);
-				std::shared_ptr<SESSION> s = clients[id].load();
-				if (!s)
-				{
-					continue;
+				if (npcs.count(id)) {
+					auto npc = npcs[id];
+					s2c_add_npc add_pkt;
+					add_pkt.size = sizeof(add_pkt);
+					add_pkt.type = packet_type::S2C_ADD_NPC;
+					add_pkt.id = id;
+					add_pkt.x = npc->x_;
+					add_pkt.y = npc->y_;
+					strcpy_s(add_pkt.npcName, npc->userName_);
+					do_send(add_pkt.size, reinterpret_cast<char*>(&add_pkt));
+					
+					visible_players_mutex.lock();
+					visible_players.insert(id);
+					visible_players_mutex.unlock();
+				} else {
+					send_add_player(id);
+					std::shared_ptr<SESSION> s = clients[id].load();
+					if (s) s->send_add_player(id_);
 				}
-				s->send_add_player(id_);
 			}
 			else
 			{
-				std::shared_ptr<SESSION> s = clients[id].load();
-				if (!s)
-				{
-					continue;
+				if (!npcs.count(id)) {
+					std::shared_ptr<SESSION> s = clients[id].load();
+					if (s && s->state_ == client_state::playing)
+					{
+						s->send_move_packet(id_, packet->timestamp);
+					}
 				}
-				if (s->state_ == client_state::playing)
-				{
-					s->send_move_packet(id_, packet->timestamp);
-				}
-
 			}
 		}
 
@@ -368,13 +447,21 @@ bool SESSION::proccess_packet(unsigned char* buff)
 		{
 			if (!new_visible_players.contains(id))
 			{
-				send_remove_player(id);
-				std::shared_ptr<SESSION> s = clients[id].load();
-				if (!s)
-				{
-					continue;
+				if (npcs.count(id)) {
+					s2c_remove_npc remove_pkt;
+					remove_pkt.size = sizeof(remove_pkt);
+					remove_pkt.type = packet_type::S2C_REMOVE_NPC;
+					remove_pkt.id = id;
+					do_send(remove_pkt.size, reinterpret_cast<char*>(&remove_pkt));
+					
+					visible_players_mutex.lock();
+					visible_players.erase(id);
+					visible_players_mutex.unlock();
+				} else {
+					send_remove_player(id);
+					std::shared_ptr<SESSION> s = clients[id].load();
+					if (s) s->send_remove_player(id_);
 				}
-				s->send_remove_player(id_);
 			}
 		}
 		break;
@@ -392,26 +479,30 @@ bool SESSION::proccess_packet(unsigned char* buff)
 
 void SESSION::send_move_packet(int move_player_id, uint32_t timestamp)
 {
-	std::shared_ptr<SESSION> player = clients[move_player_id].load();
+	std::shared_ptr<SESSION> session = clients[move_player_id].load();
+	if (!session || !session->player_) return;
+
 	s2c_player_move move_packet;
 	move_packet.size = sizeof(s2c_player_move);
 	move_packet.type = packet_type::S2C_PLAYER_MOVE;
-	move_packet.id = player->id_;
-	move_packet.x = player->x_;
-	move_packet.y = player->y_;
+	move_packet.id = move_player_id;
+	move_packet.x = session->player_->x_;
+	move_packet.y = session->player_->y_;
 	move_packet.timestamp = timestamp;
 	do_send(move_packet.size, reinterpret_cast<char*>(&move_packet));
 }
 void SESSION::send_add_player(int player_id)
 {
-	std::shared_ptr<SESSION> player = clients[player_id].load();
+	std::shared_ptr<SESSION> session = clients[player_id].load();
+	if (!session || !session->player_) return;
+
 	s2c_add_player add_packet;
 	add_packet.size = sizeof(s2c_add_player);
 	add_packet.type = packet_type::S2C_ADD_PLAYER;
 	add_packet.id = player_id;
-	strncpy_s(add_packet.userName, player->userName_, MAX_NAME_LEN);
-	add_packet.x = player->x_;
-	add_packet.y = player->y_;
+	strncpy_s(add_packet.userName, session->player_->userName_, MAX_NAME_LEN);
+	add_packet.x = session->player_->x_;
+	add_packet.y = session->player_->y_;
 
 	visible_players_mutex.lock();
 	if (visible_players.contains(player_id))
@@ -426,14 +517,33 @@ void SESSION::send_add_player(int player_id)
 
 void SESSION::send_already_spawn_players()
 {
-	auto object_ids_nearby_sector = sector.get_objects_nearby_sector(x_, y_);
+	auto object_ids_nearby_sector = sector.get_objects_nearby_sector(player_->x_, player_->y_);
 	for (auto& id : object_ids_nearby_sector)
 	{
 		if (id != this->id_)
 		{
+			if (npcs.count(id)) {
+				auto npc = npcs[id];
+				if (is_visible(npc->x_, npc->y_)) {
+					s2c_add_npc add_pkt;
+					add_pkt.size = sizeof(add_pkt);
+					add_pkt.type = packet_type::S2C_ADD_NPC;
+					add_pkt.id = id;
+					add_pkt.x = npc->x_;
+					add_pkt.y = npc->y_;
+					strcpy_s(add_pkt.npcName, npc->userName_);
+					do_send(add_pkt.size, reinterpret_cast<char*>(&add_pkt));
+					
+					visible_players_mutex.lock();
+					visible_players.insert(id);
+					visible_players_mutex.unlock();
+				}
+				continue;
+			}
+
 			std::shared_ptr<SESSION> o = clients[id].load();
-			if (nullptr == o) continue;
-			if (false == is_visible(o->x_, o->y_)) continue;
+			if (nullptr == o || !o->player_) continue;
+			if (false == is_visible(o->player_->x_, o->player_->y_)) continue;
 			if (client_state::playing == o->state_)
 				send_add_player(id);
 		}
@@ -442,26 +552,45 @@ void SESSION::send_already_spawn_players()
 
 void broadcast_new_player(int new_player_id)
 {
-	auto new_player = clients[new_player_id].load();
-	auto object_ids_nearby_sector = sector.get_objects_nearby_sector(new_player->x_, new_player->y_);
+	auto new_player_session = clients[new_player_id].load();
+	if (!new_player_session || !new_player_session->player_) return;
+
+	auto object_ids_nearby_sector = sector.get_objects_nearby_sector(new_player_session->player_->x_, new_player_session->player_->y_);
 	for (auto& id : object_ids_nearby_sector)
 	{
 		if (id != new_player_id)
 		{
+			if (npcs.count(id)) continue; // NPCs don't receive broadcasts
+
 			std::shared_ptr<SESSION> o = clients[id].load();
-			if (nullptr == o) continue;
-			if (false == o->is_visible(new_player->x_, new_player->y_)) continue;
+		}
+	}
+}
+// Fix broadcast_new_player and others
+void broadcast_new_player_fixed(int new_player_id) {
+	auto new_player_session = clients[new_player_id].load();
+	if (!new_player_session || !new_player_session->player_) return;
+
+	auto object_ids_nearby_sector = sector.get_objects_nearby_sector(new_player_session->player_->x_, new_player_session->player_->y_);
+	for (auto& id : object_ids_nearby_sector) {
+		if (id != new_player_id && !npcs.count(id)) {
+			std::shared_ptr<SESSION> o = clients[id].load();
+			if (nullptr == o || !o->player_) continue;
+			if (false == o->is_visible(new_player_session->player_->x_, new_player_session->player_->y_)) continue;
 			if (client_state::playing == o->state_)
 				o->send_add_player(new_player_id);
 		}
 	}
 }
+
 void broadcast_player_remove_packet(int player_id)
 {
 	auto removed_player = clients[player_id].load();
+	if (!removed_player) return;
+
 	for (auto& id : removed_player->visible_players)
 	{
-		if (id != player_id)
+		if (id != player_id && !npcs.count(id))
 		{
 			std::shared_ptr<SESSION> o = clients[id].load();
 			if (nullptr == o) continue;
@@ -487,10 +616,10 @@ void client_disconnect(int client_id)
 {
 	std::cout << "client[" << client_id << "] Disconnected.\n";
 	std::shared_ptr<SESSION> cl = clients[client_id].load();
-	if (nullptr != cl) {
+	if (nullptr != cl && cl->player_) {
 		cl->state_ = client_state::logout;
 		broadcast_player_remove_packet(cl->id_);
-		sector.remove_object(cl->id_, cl->x_, cl->y_);
+		sector.remove_object(cl->id_, cl->player_->x_, cl->player_->y_);
 		closesocket(cl->client_);
 		cl->client_ = INVALID_SOCKET;
 	}
@@ -517,7 +646,6 @@ void worker_thread()
 			client_disconnect(id);
 			continue;
 		}
-		std::shared_ptr<SESSION> session = clients[id].load();
 		if (o->type == io_type::recv && bytes_transferred == 0 && WSAGetLastError() != WSA_IO_PENDING)
 		{
 			client_disconnect(id);
@@ -533,15 +661,17 @@ void worker_thread()
 		{
 		case io_type::accept:
 		{
-			//std::cout << "New Client Connected!" << std::endl;
 			int current_id = player_index++;
 			CreateIoCompletionPort((HANDLE)o->accept_socket, h_iocp, current_id, 0);
 			std::shared_ptr<SESSION> new_session = std::make_shared<SESSION>();
 			new_session->id_ = current_id;
 			new_session->client_ = o->accept_socket;
 			new_session->state_ = client_state::connected;
-			new_session->x_ = rand() % WORLD_WIDTH;
-			new_session->y_ = rand() % WORLD_HEIGHT;
+			if (new_session->player_) {
+				new_session->player_->id_ = current_id;
+				new_session->player_->x_ = rand() % WORLD_WIDTH;
+				new_session->player_->y_ = rand() % WORLD_HEIGHT;
+			}
 			clients.emplace(current_id, new_session);
 			new_session->send_login_success();
 			new_session->do_recv();
@@ -600,9 +730,6 @@ void worker_thread()
 		}
 		case io_type::send:
 		{
-			//packet_type sent_type = (*reinterpret_cast<packet_type*>(&o->wsabuffer.buf[1]));
-			//cout << "Send Complete to Client[" << session.id << "], Bytes Sent: " << bytes_transferred
-			//	<< " Packet Type = " << static_cast<uint16_t>(sent_type) << endl;
 			delete o;
 			break;
 		}

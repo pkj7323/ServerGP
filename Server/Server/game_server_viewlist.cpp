@@ -1,4 +1,4 @@
-﻿#include <iostream>
+#include <iostream>
 #include <WS2tcpip.h>
 #include <array>
 #pragma comment(lib, "WS2_32.lib")
@@ -72,6 +72,28 @@ enum class client_state
 	playing,
 	logout
 };
+
+class BaseObject {
+public:
+	int				id_;
+	int16_t 		x_;
+	int16_t 		y_;
+	char			userName_[MAX_NAME_LEN];
+
+	BaseObject() : id_(-1), x_{ 0 }, y_{ 0 }, userName_{} {}
+	virtual ~BaseObject() {}
+};
+
+class Player : public BaseObject {
+public:
+	Player() : BaseObject() {}
+};
+
+class NPC : public BaseObject {
+public:
+	NPC() : BaseObject() {}
+};
+
 class SESSION {
 public:
 	SOCKET			client_;
@@ -80,18 +102,19 @@ public:
 	int				prev_recv_count_ = 0;
 	client_state	state_;
 
-	int16_t 		x_;
-	int16_t 		y_;
-	char			userName_[MAX_NAME_LEN];
+	std::shared_ptr<Player> player_; // 세션이 플레이어 객체를 소유함
+
 	std::unordered_set<int> visible_players; // 현재 보이는 플레이어 ID 목록
 	std::mutex visible_players_mutex; // 보이는 플레이어 목록 보호용 뮤텍스
-	SESSION() : x_{ 0 }, y_{ 0 }, userName_{}
+
+	SESSION()
 	{
 		prev_recv_count_ = 0;
 		state_ = client_state::connected;
 		id_ = 999;
 		client_ = INVALID_SOCKET;
 		recv_over_.type = io_type::recv;
+		player_ = std::make_shared<Player>();
 	}
 	~SESSION()
 	{
@@ -108,9 +131,12 @@ public:
 		id_ = 999;
 		closesocket(client_);
 		client_ = INVALID_SOCKET;
-		x_ = 0;
-		y_ = 0;
-		ZeroMemory(userName_, sizeof(userName_));
+		if (player_) {
+			player_->id_ = -1;
+			player_->x_ = 0;
+			player_->y_ = 0;
+			ZeroMemory(player_->userName_, sizeof(player_->userName_));
+		}
 		ZeroMemory(&recv_over_.over, sizeof(WSAOVERLAPPED));
 		recv_over_.type = io_type::recv;
 		recv_over_.wsabuffer.buf = recv_over_.buff; // 본인의 버퍼 주소로 재설정
@@ -142,8 +168,8 @@ public:
 		info_packet.size = sizeof(s2c_avatar_info);
 		info_packet.type = packet_type::S2C_AVATAR_INFO;
 		info_packet.id = id_;
-		info_packet.x = x_;
-		info_packet.y = y_;
+		info_packet.x = player_->x_;
+		info_packet.y = player_->y_;
 		do_send(sizeof(s2c_avatar_info), reinterpret_cast<char*>(&info_packet));
 	}
 
@@ -177,12 +203,13 @@ public:
 	void send_add_player(int player_id);
 	bool is_visible(int16_t x, int16_t y)
 	{
-		return abs(x - x_) <= VIEW_RANGE && abs(y - y_) <= VIEW_RANGE;
+		return abs(x - player_->x_) <= VIEW_RANGE && abs(y - player_->y_) <= VIEW_RANGE;
 	}
 	void send_already_spawn_players();
 };
 
 tbb::concurrent_unordered_map<int, std::atomic<std::shared_ptr<SESSION>>> clients;
+tbb::concurrent_unordered_map<int, std::shared_ptr<NPC>> npcs;
 
 
 bool SESSION::proccess_packet(unsigned char* buff)
@@ -193,12 +220,31 @@ bool SESSION::proccess_packet(unsigned char* buff)
 	case packet_type::C2S_LOGIN:
 	{
 		c2s_login* p = reinterpret_cast<c2s_login*>(buff);
-		strncpy_s(userName_, p->userName, MAX_NAME_LEN);
-		//std::cout << "Client[" << id_ << "] Login: " << userName_ << std::endl;
+		strncpy_s(player_->userName_, p->userName, MAX_NAME_LEN);
+		//std::cout << "Client[" << id_ << "] Login: " << player_->userName_ << std::endl;
 		state_ = client_state::playing;
 		send_avatar_info();
 		send_already_spawn_players();
 		broadcast_new_player(id_);
+
+		// Spawn a test NPC next to the player
+		int npc_id = 2000 + id_; // Temporary NPC ID
+		auto test_npc = std::make_shared<NPC>();
+		test_npc->id_ = npc_id;
+		test_npc->x_ = player_->x_ + 1;
+		test_npc->y_ = player_->y_;
+		strcpy_s(test_npc->userName_, "TestNPC");
+		npcs[npc_id] = test_npc;
+
+		// Send ADD_NPC to the current player
+		s2c_add_npc add_npc_pkt;
+		add_npc_pkt.size = sizeof(s2c_add_npc);
+		add_npc_pkt.type = packet_type::S2C_ADD_NPC;
+		add_npc_pkt.id = test_npc->id_;
+		add_npc_pkt.x = test_npc->x_;
+		add_npc_pkt.y = test_npc->y_;
+		strcpy_s(add_npc_pkt.npcName, test_npc->userName_);
+		do_send(add_npc_pkt.size, reinterpret_cast<char*>(&add_npc_pkt));
 		break;
 	}
 	case packet_type::C2S_MOVE:
@@ -207,15 +253,15 @@ bool SESSION::proccess_packet(unsigned char* buff)
 		int16_t dx = packet->dir.x;
 		int16_t dy = packet->dir.y;
 
-		int16_t new_x = x_ + dx;
-		int16_t new_y = y_ + dy;
+		int16_t new_x = player_->x_ + dx;
+		int16_t new_y = player_->y_ + dy;
 		if (new_x >= 0 && new_x < WORLD_WIDTH)
 		{
-			x_ = new_x;
+			player_->x_ = new_x;
 		}
 		if (new_y >= 0 && new_y < WORLD_HEIGHT)
 		{
-			y_ = new_y;
+			player_->y_ = new_y;
 		}
 		std::unordered_set<int> old_view;
 		{
@@ -224,12 +270,12 @@ bool SESSION::proccess_packet(unsigned char* buff)
 		}
 
 		std::unordered_set<int> new_visible_players; // 새로 보이는 플레이어 목록
-		//std::cout << "Player[" << id_ << "] moved to (" << x_ << ", " << y_ << ")\n";
+		//std::cout << "Player[" << id_ << "] moved to (" << player_->x_ << ", " << player_->y_ << ")\n";
 		for (auto& [id, session] : clients)
 		{
 			std::shared_ptr<SESSION> s = session.load();
 			if (nullptr == s) continue;
-			if (s->is_visible(x_, y_))
+			if (s->is_visible(player_->x_, player_->y_))
 			{
 				new_visible_players.insert(id);
 			}
@@ -291,26 +337,30 @@ bool SESSION::proccess_packet(unsigned char* buff)
 
 void SESSION::send_move_packet(int move_player_id, uint32_t timestamp)
 {
-	std::shared_ptr<SESSION> player = clients[move_player_id].load();
+	std::shared_ptr<SESSION> session = clients[move_player_id].load();
+	if (!session || !session->player_) return;
+
 	s2c_player_move move_packet;
 	move_packet.size = sizeof(s2c_player_move);
 	move_packet.type = packet_type::S2C_PLAYER_MOVE;
-	move_packet.id = player->id_;
-	move_packet.x = player->x_;
-	move_packet.y = player->y_;
+	move_packet.id = move_player_id;
+	move_packet.x = session->player_->x_;
+	move_packet.y = session->player_->y_;
 	move_packet.timestamp = timestamp;
 	do_send(move_packet.size, reinterpret_cast<char*>(&move_packet));
 }
 void SESSION::send_add_player(int player_id)
 {
-	std::shared_ptr<SESSION> player = clients[player_id].load();
+	std::shared_ptr<SESSION> session = clients[player_id].load();
+	if (!session || !session->player_) return;
+
 	s2c_add_player add_packet;
 	add_packet.size = sizeof(s2c_add_player);
 	add_packet.type = packet_type::S2C_ADD_PLAYER;
 	add_packet.id = player_id;
-	strncpy_s(add_packet.userName, player->userName_, MAX_NAME_LEN);
-	add_packet.x = player->x_;
-	add_packet.y = player->y_;
+	strncpy_s(add_packet.userName, session->player_->userName_, MAX_NAME_LEN);
+	add_packet.x = session->player_->x_;
+	add_packet.y = session->player_->y_;
 	
 	visible_players_mutex.lock();
 	if (visible_players.contains(player_id))
@@ -330,8 +380,8 @@ void SESSION::send_already_spawn_players()
 		if (id != this->id_)
 		{
 			std::shared_ptr<SESSION> o = session.load();
-			if (nullptr == o) continue;
-			if (false == is_visible(o->x_, o->y_)) continue;
+			if (nullptr == o || !o->player_) continue;
+			if (false == is_visible(o->player_->x_, o->player_->y_)) continue;
 			if (client_state::playing == o->state_)
 				send_add_player(id);
 		}
@@ -340,14 +390,16 @@ void SESSION::send_already_spawn_players()
 
 void broadcast_new_player(int new_player_id)
 {
-	auto new_player = clients[new_player_id].load();
+	auto new_player_session = clients[new_player_id].load();
+	if (!new_player_session || !new_player_session->player_) return;
+
 	for (auto& [id, session] : clients)
 	{
 		if (id != new_player_id)
 		{
 			std::shared_ptr<SESSION> o = session.load();
-			if (nullptr == o) continue;
-			if (false == o->is_visible(new_player->x_, new_player->y_)) continue;
+			if (nullptr == o || !o->player_) continue;
+			if (false == o->is_visible(new_player_session->player_->x_, new_player_session->player_->y_)) continue;
 			if (client_state::playing == o->state_)
 				o->send_add_player(new_player_id);
 		}
@@ -356,6 +408,8 @@ void broadcast_new_player(int new_player_id)
 void broadcast_player_remove_packet(int player_id)
 {
 	auto removed_player = clients[player_id].load();
+	if (!removed_player) return;
+
 	for (auto& id : removed_player->visible_players)
 	{
 		if (id != player_id)
@@ -438,8 +492,11 @@ void worker_thread()
 			new_session->id_ = current_id;
 			new_session->client_ = o->accept_socket;
 			new_session->state_ = client_state::connected;
-			new_session->x_ = rand() % WORLD_WIDTH;
-			new_session->y_ = rand() % WORLD_HEIGHT;
+			if (new_session->player_) {
+				new_session->player_->id_ = current_id;
+				new_session->player_->x_ = rand() % WORLD_WIDTH;
+				new_session->player_->y_ = rand() % WORLD_HEIGHT;
+			}
 			clients.emplace(current_id, new_session);
 			new_session->send_login_success();
 			new_session->do_recv();
