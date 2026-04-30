@@ -184,6 +184,9 @@ void ProcessPacket(int ci, unsigned char packet[])
 		//SendPacket(my_id, &t_packet);
 	}
 	break;
+	case packet_type::S2C_ADD_NPC: break;
+	case packet_type::S2C_REMOVE_NPC: break;
+	case packet_type::S2C_NPC_MOVE: break;
 	default: MessageBox(hWnd, L"Unknown Packet Type", L"ERROR", 0);
 		while (true);
 	}

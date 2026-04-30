@@ -931,7 +931,7 @@ void timer_thread()
 			}
 		}
 		std::this_thread::yield();
-		if (std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - last_send_time).count()
+		if (std::chrono::duration_cast<std::chrono::milliseconds>(last_send_time - std::chrono::steady_clock::now()).count()
 			>= 1000)
 		{
 			std::cout << "Timer Thread: Processed timer events. Elapsed Time: " << elasped_time << " ms\n";
