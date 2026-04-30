@@ -767,27 +767,26 @@ void worker_thread()
 	}
 }
 
-void npc_random_move()
+void npc_random_move(int id)
 {
-	for (auto& [npc_id, npc] : npcs)
+	auto npc = npcs[id];
+	if (!npc) return;
+	int16_t old_x = npc->x_;
+	int16_t old_y = npc->y_;
+	int16_t dx = (rand() % 3) - 1; // -1, 0, or 1
+	int16_t dy = (rand() % 3) - 1; // -1, 0, or 1
+	int16_t new_x = npc->x_ + dx;
+	int16_t new_y = npc->y_ + dy;
+	if (new_x >= 0 && new_x < WORLD_WIDTH)
 	{
-		if (!npc) continue;
-		int16_t old_x = npc->x_;
-		int16_t old_y = npc->y_;
-		int16_t dx = (rand() % 3) - 1; // -1, 0, or 1
-		int16_t dy = (rand() % 3) - 1; // -1, 0, or 1
-		int16_t new_x = npc->x_ + dx;
-		int16_t new_y = npc->y_ + dy;
-		if (new_x >= 0 && new_x < WORLD_WIDTH)
-		{
-			npc->x_ = new_x;
-		}
-		if (new_y >= 0 && new_y < WORLD_HEIGHT)
-		{
-			npc->y_ = new_y;
-		}
-		sector.move_object(npc_id, old_x, old_y, npc->x_, npc->y_);
+		npc->x_ = new_x;
 	}
+	if (new_y >= 0 && new_y < WORLD_HEIGHT)
+	{
+		npc->y_ = new_y;
+	}
+	sector.move_object(id, old_x, old_y, npc->x_, npc->y_);
+	
 }
 constexpr int MOVE_COOL_TIME = 1000; // NPC 이동 쿨타임 (밀리초)
 void ai_thread()
@@ -801,14 +800,39 @@ void ai_thread()
 			if (!npc) continue;
 			if (duration_cast<milliseconds>(current_time - npc->last_move_timestamp_).count() >= MOVE_COOL_TIME)
 			{
-				npc_random_move();
+				npc_random_move(npc_id);
 				npc->last_move_timestamp_ = current_time;
 				// NPC 이동 후, 해당 NPC를 볼 수 있는 플레이어들에게 이동 패
 			}
 		}
 		auto end_time = system_clock::now();
 		auto elapsed = duration_cast<milliseconds>(end_time - current_time).count();
-
+		
+		for (auto& [npc_id, npc] : npcs)
+		{
+			if (!npc) continue;
+			auto nearby_players = sector.get_objects_nearby_sector(npc->x_, npc->y_);
+			for (auto& player_id : nearby_players)
+			{
+				if (npcs.count(player_id)) continue; // NPC는 패킷을 받지 않음
+				std::shared_ptr<SESSION> session = clients[player_id].load();
+				if (!session || session->state_ != client_state::playing) continue;
+				if (session->is_visible(npc->x_, npc->y_))
+				{
+					s2c_npc_move move_packet;
+					move_packet.size = sizeof(move_packet);
+					move_packet.type = packet_type::S2C_NPC_MOVE;
+					move_packet.id = npc_id;
+					move_packet.x = npc->x_;
+					move_packet.y = npc->y_;
+					session->do_send(sizeof(move_packet), reinterpret_cast<char*>(&move_packet));
+				}
+			}
+		}
+		if (elapsed < 5)
+		{
+			std::this_thread::sleep_for(milliseconds(10)); // AI 스레드의 CPU 사용량을 줄이기 위해 잠시 대기
+		}
 	}
 }
 
@@ -841,6 +865,7 @@ int main()
 	AcceptEx(server_socket, accept_over.accept_socket, &accept_over.buff, 0,
 		sizeof(SOCKADDR_IN) + 16, sizeof(SOCKADDR_IN) + 16, NULL, &accept_over.over);
 
+	std::thread ai_thread_handle(ai_thread);
 
 	std::vector<std::thread> worker_threads;
 	for (unsigned int i = 0; i < std::thread::hardware_concurrency(); ++i)
@@ -851,6 +876,7 @@ int main()
 	{
 		t.join();
 	}
+	ai_thread_handle.join();
 
 	closesocket(server_socket);
 	WSACleanup();
