@@ -431,7 +431,7 @@ bool SESSION::proccess_packet(unsigned char* buff)
 			if (id == id_) continue;
 
 			// NPCs check
-			if (npcs.count(id) && is_npc_id(id)) {
+			if (is_npc_id(id)) {
 				auto npc = npcs[id];
 				if (is_visible(npc->x_, npc->y_)) {
 					new_visible_players.insert(id);
@@ -456,7 +456,7 @@ bool SESSION::proccess_packet(unsigned char* buff)
 		{
 			if (!old_view.contains(id))
 			{
-				if (npcs.count(id)) {
+				if (npcs.contains(id)) {
 					auto npc = npcs[id];
 					s2c_add_npc add_pkt;
 					add_pkt.size = sizeof(add_pkt);
@@ -479,7 +479,7 @@ bool SESSION::proccess_packet(unsigned char* buff)
 			}
 			else
 			{
-				if (!npcs.count(id)) {
+				if (!npcs.contains(id)) {
 					std::shared_ptr<SESSION> s = clients[id].load();
 					if (s && s->state_ == client_state::playing)
 					{
@@ -493,7 +493,7 @@ bool SESSION::proccess_packet(unsigned char* buff)
 		{
 			if (!new_visible_players.contains(id))
 			{
-				if (npcs.count(id)) {
+				if (npcs.contains(id)) {
 					s2c_remove_npc remove_pkt;
 					remove_pkt.size = sizeof(remove_pkt);
 					remove_pkt.type = packet_type::S2C_REMOVE_NPC;
@@ -915,7 +915,7 @@ void timer_thread()
 			auto nearby_players = sector.get_objects_nearby_sector(npcs[event.obj_id]->x_, npcs[event.obj_id]->y_);
 			for (auto& player_id : nearby_players)
 			{
-				if (npcs.count(player_id)) continue; // NPC는 패킷을 받지 않음
+				if (is_npc_id(player_id)) continue; // NPC는 패킷을 받지 않음
 				std::shared_ptr<SESSION> session = clients[player_id].load();
 				if (!session || session->state_ != client_state::playing) continue;
 				if (session->is_visible(npcs[event.obj_id]->x_, npcs[event.obj_id]->y_))
