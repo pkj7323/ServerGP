@@ -3,4 +3,4 @@ function addtwo(a, b)
 end
 
 pos_x = 10
-pos_y = 0
+pos_y = 10
