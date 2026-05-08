@@ -391,15 +391,17 @@ tbb::concurrent_unordered_map<int, std::atomic<std::shared_ptr<SESSION>>> client
 
 class NPC : public BaseObject {
 public:
+	std::atomic<bool> is_active{ false };
+public:
 	NPC() : BaseObject(), last_move_timestamp_(std::chrono::system_clock::now()) {}
 	std::chrono::time_point<std::chrono::system_clock> last_move_timestamp_; // NPC의 마지막 이동 시간 기록
 	void heartbeat()
 	{
 		do_random_move();
 	}
-	void do_timer_move()
+	bool do_timer_move()
 	{
-		do_random_move();
+		bool has_player_nearby = do_random_move();
 		if (id_ == make_npc_id(20000))
 		{
 			auto delay = std::chrono::system_clock::now() - last_move_timestamp_;
@@ -407,8 +409,9 @@ public:
 		}
 
 		last_move_timestamp_ = std::chrono::system_clock::now();
+		return has_player_nearby;
 	}
-	void do_random_move()
+	bool do_random_move()
 	{
 		std::unordered_set<int> old_vl;
 		for (auto id : sector.get_objects_nearby_sector(x_, y_))
@@ -428,6 +431,7 @@ public:
 		case 3:if (y_ > 0) y_--; break;
 		}
 
+		
 		sector.move_object(id_, old_x, old_y, x_, y_);
 		std::unordered_set<int> new_vl;
 		for (auto id : sector.get_objects_nearby_sector(x_, y_))
@@ -462,7 +466,22 @@ public:
 				if (s) s->send_remove_player(id_);
 			}
 		}
+		return !new_vl.empty();
+	}
+	void wake_up()
+	{
+		bool expected = false;
+		if (!is_active.compare_exchange_strong(expected, true))
+		{
+			return;
+		}
 
+		event_type ev;
+		ev.obj_id = id_;
+		ev.wakeup_time = std::chrono::system_clock::now() + std::chrono::milliseconds(MOVE_COOL_TIME + (rand() % MOVE_COOL_TIME_VARIATION));
+		ev.event_id = EVENT_MOVE;
+		ev.target_id = -1;
+		timer_queue.push(ev);
 	}
 };
 
@@ -579,13 +598,13 @@ bool SESSION::proccess_packet(unsigned char* buff)
 				new_visible_players.insert(id);
 			}
 		}
-		send_move_packet(id_, packet->move_time);
+		send_move_packet(id_, packet->move_time); // 나한테 보내기
 
 		for (auto& id : new_visible_players)
 		{
 			if (!old_view.contains(id))
 			{
-				if (npcs.contains(id)) {
+				if (is_npc_id(id)) {
 					auto npc = npcs[id].load();
 					S2C_AddPlayer add_pkt;
 					add_pkt.size = sizeof(add_pkt);
@@ -595,6 +614,8 @@ bool SESSION::proccess_packet(unsigned char* buff)
 					add_pkt.y = npc->y_;
 					strcpy_s(add_pkt.username, npc->userName_);
 					do_send(add_pkt.size, reinterpret_cast<char*>(&add_pkt));
+
+					npc->wake_up();
 
 					visible_players_mutex.lock();
 					visible_players.insert(id);
@@ -709,7 +730,7 @@ void SESSION::send_already_spawn_players()
 	{
 		if (id != this->id_)
 		{
-			if (npcs.count(id)) {
+			if (is_npc_id(id)) {
 				auto npc = npcs[id].load();
 				if (is_visible(npc->x_, npc->y_)) {
 					S2C_AddPlayer add_pkt;
@@ -753,6 +774,11 @@ void broadcast_new_player(int new_player_id)
 			if (false == o->is_visible(new_player_session->player_->x_, new_player_session->player_->y_)) continue;
 			if (client_state::playing == o->state_)
 				o->send_add_player(new_player_id);
+		}
+		if (is_npc_id(id))
+		{
+			auto npc = npcs[id].load();
+			npc->wake_up();
 		}
 	}
 }
@@ -811,12 +837,6 @@ void npc_initialize()
 		strcpy_s(npc->userName_, npc_name.c_str());
 		npcs[npc_id] = npc;
 		sector.add_object(npc_id, npc->x_, npc->y_); // 섹터에 NPC 추가
-		timer_queue.push({ npc_id, 
-			std::chrono::system_clock::now()
-			+ std::chrono::milliseconds(MOVE_COOL_TIME)
-			+ std::chrono::milliseconds(rand() % MOVE_COOL_TIME_VARIATION),
-			EVENT_MOVE,
-			-1 });
 	}
 }
 
@@ -1086,18 +1106,28 @@ void worker_thread()
 		}
 		case io_type::npc_move:
 		{
+			delete o;
 			auto npc = npcs[id].load();
-			if (npc)
+			bool has_nearby_player = false;
+			if (!npc)
+				break;
+
+			has_nearby_player = npc->do_timer_move();
+
+			if (has_nearby_player)
 			{
-				npc->do_timer_move();
 				event_type ev;
 				ev.obj_id = id;
+				ev.wakeup_time = std::chrono::system_clock::now() + std::chrono::milliseconds(MOVE_COOL_TIME + rand() % MOVE_COOL_TIME_VARIATION);
 				ev.event_id = EVENT_MOVE;
-				ev.wakeup_time = std::chrono::system_clock::now() + std::chrono::milliseconds(MOVE_COOL_TIME) + std::chrono::milliseconds(rand() % MOVE_COOL_TIME_VARIATION);
 				ev.target_id = -1;
 				timer_queue.push(ev);
 			}
-			delete o;
+			else
+			{
+				npc->is_active = false;
+			}
+
 			break;
 		}
 		default:
