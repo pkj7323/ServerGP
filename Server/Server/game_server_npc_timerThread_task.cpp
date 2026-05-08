@@ -60,7 +60,7 @@ constexpr int BUF_SIZE = 1024;
 constexpr int VIEW_RANGE = 5;
 constexpr int SECTOR_SIZE = 10;
 constexpr int MOVE_COOL_TIME = 1000; // NPC 이동 쿨타임 (밀리초)
-constexpr int MOVE_COOL_TIME_VARIATION = 100;
+constexpr int MOVE_COOL_TIME_VARIATION = 1000;
 
 std::atomic<int> player_index = 1;
 std::atomic<int> npc_index = 20000;
@@ -84,6 +84,11 @@ public:
 	WSABUF			wsabuffer;
 	char			buff[BUF_SIZE];
 	SOCKET			accept_socket;
+
+	// 배칭용 멤버 추가
+	std::vector<WSABUF> wsa_bufs;
+	std::vector<std::vector<char>> pending_data;
+
 	EXP_OVER()
 	{
 		ZeroMemory(&over, sizeof(over));
@@ -95,6 +100,15 @@ public:
 		ZeroMemory(&over, sizeof(over));
 		wsabuffer.buf = buff;
 		wsabuffer.len = BUF_SIZE;
+	}
+	// 배칭용 생성자
+	EXP_OVER(std::vector<std::vector<char>>&& data) : type(io_type::send), pending_data(std::move(data))
+	{
+		ZeroMemory(&over, sizeof(over));
+		wsa_bufs.reserve(pending_data.size());
+		for (auto& d : pending_data) {
+			wsa_bufs.push_back({ static_cast<ULONG>(d.size()), d.data() });
+		}
 	}
 	EXP_OVER(char* packet)
 	{
@@ -287,6 +301,11 @@ public:
 	std::unordered_set<int> visible_players; // 현재 보이는 플레이어 ID 목록
 	std::mutex visible_players_mutex; // 보이는 플레이어 목록 보호용 뮤텍스
 
+	// 송신 배칭용 멤버 추가
+	std::mutex send_mtx;
+	std::vector<std::vector<char>> send_queue;
+	std::atomic<bool> is_sending{ false };
+
 	SESSION()
 	{
 		prev_recv_count_ = 0;
@@ -321,6 +340,10 @@ public:
 		recv_over_.type = io_type::recv;
 		recv_over_.wsabuffer.buf = recv_over_.buff; // 본인의 버퍼 주소로 재설정
 		recv_over_.wsabuffer.len = BUF_SIZE;
+
+		std::lock_guard<std::mutex> lock(send_mtx);
+		send_queue.clear();
+		is_sending = false;
 	}
 	void do_recv()
 	{
@@ -330,12 +353,42 @@ public:
 		recv_over_.wsabuffer.len = BUF_SIZE - prev_recv_count_;
 		WSARecv(client_, &recv_over_.wsabuffer, 1, 0, &recv_flag, &recv_over_.over, nullptr);
 	}
-	void do_send(int num_bytes, char* mess)
+	void do_send(int size, char* packet)
 	{
-		EXP_OVER* o = new EXP_OVER(io_type::send);
-		o->wsabuffer.len = num_bytes;
-		memcpy(o->wsabuffer.buf, mess, num_bytes);
-		WSASend(client_, &o->wsabuffer, 1, 0, 0, &o->over, nullptr);
+		{
+			std::lock_guard<std::mutex> lock(send_mtx);
+			send_queue.emplace_back(packet, packet + size);
+		}
+
+		bool expected = false;
+		if (is_sending.compare_exchange_strong(expected, true)) {
+			flush_send();
+		}
+	}
+
+	void flush_send()
+	{
+		std::vector<std::vector<char>> sending_data;
+		{
+			std::lock_guard<std::mutex> lock(send_mtx);
+			if (send_queue.empty()) {
+				is_sending = false;
+				return;
+			}
+			sending_data.swap(send_queue);
+		}
+
+		EXP_OVER* send_over = new EXP_OVER(std::move(sending_data));
+		DWORD send_bytes;
+		int ret = WSASend(client_, send_over->wsa_bufs.data(), static_cast<DWORD>(send_over->wsa_bufs.size()), &send_bytes, 0, &send_over->over, NULL);
+
+		if (ret == SOCKET_ERROR && WSAGetLastError() != WSA_IO_PENDING) {
+			delete send_over;
+			std::lock_guard<std::mutex> lock(send_mtx);
+			is_sending = false;
+			// 에러 발생 시 클라이언트 연결 종료 고려
+			// client_disconnect(id_); 
+		}
 	}
 
 	bool proccess_packet(unsigned char* buff);
@@ -629,7 +682,7 @@ bool SESSION::proccess_packet(unsigned char* buff)
 			}
 			else
 			{
-				if (!npcs.contains(id)) {
+				if (!is_npc_id(id)) {
 					std::shared_ptr<SESSION> s = clients[id].load();
 					if (s && s->state_ == client_state::playing)
 					{
@@ -643,7 +696,7 @@ bool SESSION::proccess_packet(unsigned char* buff)
 		{
 			if (!new_visible_players.contains(id))
 			{
-				if (npcs.contains(id)) {
+				if (is_npc_id(id)) {
 					S2C_RemovePlayer remove_pkt;
 					remove_pkt.size = sizeof(remove_pkt);
 					remove_pkt.type = PACKET_TYPE::S2C_REMOVE_PLAYER;
@@ -789,7 +842,7 @@ void broadcast_player_remove_packet(int player_id)
 
 	for (auto& id : removed_player->visible_players)
 	{
-		if (id != player_id && !npcs.count(id))
+		if (id != player_id && !is_npc_id(id))
 		{
 			std::shared_ptr<SESSION> o = clients[id].load();
 			if (nullptr == o) continue;
@@ -876,7 +929,7 @@ void ai_thread()
 			auto nearby_players = sector.get_objects_nearby_sector(npc->x_, npc->y_);
 			for (auto& player_id : nearby_players)
 			{
-				if (npcs.count(player_id)) continue; // NPC는 패킷을 받지 않음
+				if (is_npc_id(player_id)) continue; // NPC는 패킷을 받지 않음
 				std::shared_ptr<SESSION> session = clients[player_id].load();
 				if (!session || session->state_ != client_state::playing) continue;
 				if (session->is_visible(npc->x_, npc->y_))
@@ -1102,6 +1155,8 @@ void worker_thread()
 		case io_type::send:
 		{
 			delete o;
+			std::shared_ptr<SESSION> cl = clients[id].load();
+			if (cl) cl->flush_send();
 			break;
 		}
 		case io_type::npc_move:
@@ -1126,6 +1181,10 @@ void worker_thread()
 			else
 			{
 				npc->is_active = false;
+				// 잠들기 직전 플레이어가 들어왔는지 다시 확인 (Lost Wakeup 방지)
+				if (npc->do_timer_move()) {
+					npc->wake_up();
+				}
 			}
 
 			break;
