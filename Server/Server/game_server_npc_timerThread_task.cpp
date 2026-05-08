@@ -1,4 +1,4 @@
-#include <iostream>
+﻿#include <iostream>
 #include <WS2tcpip.h>
 #include <array>
 #pragma comment(lib, "WS2_32.lib")
@@ -15,6 +15,31 @@
 #include "Protocol.h"
 #include <tbb/concurrent_unordered_map.h>
 #include <unordered_set>
+#include <valarray>
+
+// NPC 구현 첫번째 방법
+//  NPC클래스를 별도 제작, NPC컨테이너를 따로 생성한다.
+//  장점 : 깔끔하다, 군더더기가 없다.
+//  단점 : 플레이어와 NPC가 따로논다. 똑같은 역할을 수행하는 함수를 여러개씩 중복 작성해야 한다.
+//         예) bool can_see(int from, int to)
+//                 => bool can_see_p2p()
+//				    bool can_see_p2n()
+//					bool can_see_n2n()
+
+// NPC 구현 두번째 방법  <===== 실습에서 사용할 방법.
+//   clients 컨테이너에 NPC도 추가한다.
+//   장점 : 플레이어와 NPC를 동일하게 취급할 수 있어서, 프로그래밍 작성 부하가 줄어든다.
+//   단점 : 사용하지 않는 멤버들로 인한 메모리 낭비.
+
+// NPC 구현 세번째 방법  (실제로 많이 사용되는 방법)
+//   클래스 상속기능을 사용한다.
+//     SESSION은 NPC클래스를 상속받아서 네트워크 관련 기능을 추가한 형태로 정의한다.
+//       clients컨테이너를 objects컨테이너로 변경하고, 컨테이너는 NPC의 pointer를 저장한다.
+//      장점 : 메모리 낭비가 없다, 함수의 중복작성이 필요없다.
+//          (포인터로 관리되므로 player id의 중복사용 방지를 구현하기 쉬워진다 => Data Race 방지를 위한 추가 구현이 필요)
+//      단점 : 포인터가 사용되고, reinterpret_cast가 필요하다. (별로 단점이 아니다).
+
+class SESSION;
 
 void error_display(const std::wstring& msg, int err_no)
 {
@@ -34,8 +59,54 @@ void error_display(const std::wstring& msg, int err_no)
 constexpr int BUF_SIZE = 1024;
 constexpr int VIEW_RANGE = 5;
 constexpr int SECTOR_SIZE = 10;
-constexpr int MAX_NPC_COUNT = 40000;
 constexpr int MOVE_COOL_TIME = 1000; // NPC 이동 쿨타임 (밀리초)
+constexpr int MOVE_COOL_TIME_VARIATION = 100;
+
+std::atomic<int> player_index = 1;
+std::atomic<int> npc_index = 20000;
+
+HANDLE h_iocp;
+SOCKET server_socket;
+
+enum class io_type
+{
+	send,
+	recv,
+	accept,
+	npc_move,
+	count, 
+};
+
+class EXP_OVER {
+public:
+	WSAOVERLAPPED	over;
+	io_type			type = io_type::count;
+	WSABUF			wsabuffer;
+	char			buff[BUF_SIZE];
+	SOCKET			accept_socket;
+	EXP_OVER()
+	{
+		ZeroMemory(&over, sizeof(over));
+		wsabuffer.buf = buff;
+		wsabuffer.len = BUF_SIZE;
+	}
+	EXP_OVER(io_type type) : type{ type }
+	{
+		ZeroMemory(&over, sizeof(over));
+		wsabuffer.buf = buff;
+		wsabuffer.len = BUF_SIZE;
+	}
+	EXP_OVER(char* packet)
+	{
+		wsabuffer.len = packet[0];
+		wsabuffer.buf = buff;
+		ZeroMemory(&over, sizeof(over));
+		type = io_type::send;
+		memcpy(buff, packet, packet[0]);
+	}
+
+};
+
 // ID Type Flags (Bit-masking)
 constexpr int ID_TYPE_PLAYER = 0x00000000; // Players start with 0
 constexpr int ID_TYPE_NPC = 0x40000000; // NPCs have 30th bit set (starts from 1,073,741,824)
@@ -61,14 +132,9 @@ static bool is_player_id(int id)
 	return (id & ~ID_INDEX_MASK) == ID_TYPE_PLAYER;
 }
 
-std::atomic<int> player_index = 1;
-std::atomic<int> npc_index = 20000;
 
-HANDLE h_iocp;
-SOCKET server_socket;
 
 constexpr int EVENT_MOVE = -1;
-
 struct event_type {
 	int obj_id;
 	std::chrono::time_point<std::chrono::system_clock> wakeup_time;
@@ -194,69 +260,8 @@ public:
 	Player() : BaseObject() {}
 };
 
-class NPC : public BaseObject {
-public:
-	NPC() : BaseObject(), last_move_timestamp_(std::chrono::system_clock::now()) {}
-	std::chrono::time_point<std::chrono::system_clock> last_move_timestamp_; // NPC의 마지막 이동 시간 기록
-	void do_timer_move()
-	{
-		int16_t old_x = x_;
-		int16_t old_y = y_;
-		int16_t dx = (rand() % 3) - 1; // -1, 0, or 1
-		int16_t dy = (rand() % 3) - 1; // -1, 0, or 1
-		int16_t new_x = x_ + dx;
-		int16_t new_y = y_ + dy;
-		if (new_x >= 0 && new_x < WORLD_WIDTH)
-		{
-			x_ = new_x;
-		}
-		if (new_y >= 0 && new_y < WORLD_HEIGHT)
-		{
-			y_ = new_y;
-		}
-		sector.move_object(id_, old_x, old_y, x_, y_);
-		event_type move_event{ 
-			id_,
-			std::chrono::system_clock::now() + std::chrono::milliseconds(MOVE_COOL_TIME),
-			EVENT_MOVE, 
-			-1 };
-		timer_queue.push(move_event);
-	}
-};
-
-tbb::concurrent_unordered_map<int, std::shared_ptr<NPC>> npcs;
-
-enum class io_type
-{
-	send,
-	recv,
-	accept,
-	count
-};
 
 
-
-class EXP_OVER {
-public:
-	WSAOVERLAPPED	over;
-	io_type			type = io_type::count;
-	WSABUF			wsabuffer;
-	char			buff[BUF_SIZE];
-	SOCKET			accept_socket;
-	EXP_OVER()
-	{
-		ZeroMemory(&over, sizeof(over));
-		wsabuffer.buf = buff;
-		wsabuffer.len = BUF_SIZE;
-	}
-	EXP_OVER(io_type type) : type{ type }
-	{
-		ZeroMemory(&over, sizeof(over));
-		wsabuffer.buf = buff;
-		wsabuffer.len = BUF_SIZE;
-	}
-
-};
 
 void broadcast_new_player(int new_player_id);
 void broadcast_player_remove_packet(int player_id);
@@ -340,7 +345,7 @@ public:
 	{
 		S2C_AvatarInfo info_packet;
 		info_packet.size = sizeof(S2C_AvatarInfo);
-		info_packet.type = S2C_AVATAR_INFO;
+		info_packet.type = PACKET_TYPE::S2C_AVATAR_INFO;
 		info_packet.playerId = id_;
 		info_packet.x = player_->x_;
 		info_packet.y = player_->y_;
@@ -352,7 +357,7 @@ public:
 	{
 		S2C_LoginResult ack_packet;
 		ack_packet.size = sizeof(S2C_LoginResult);
-		ack_packet.type = S2C_LOGIN_RESULT;
+		ack_packet.type = PACKET_TYPE::S2C_LOGIN_RESULT;
 		ack_packet.success = true;
 		strcpy_s(ack_packet.message, "Login successful.");
 		do_send(ack_packet.size, reinterpret_cast<char*>(&ack_packet));
@@ -361,7 +366,7 @@ public:
 	{
 		S2C_RemovePlayer packet;
 		packet.size = sizeof(S2C_RemovePlayer);
-		packet.type = S2C_REMOVE_PLAYER;
+		packet.type = PACKET_TYPE::S2C_REMOVE_PLAYER;
 		packet.playerId = player_id;
 		visible_players_mutex.lock();
 		if (!visible_players.contains(player_id))
@@ -384,17 +389,134 @@ public:
 
 tbb::concurrent_unordered_map<int, std::atomic<std::shared_ptr<SESSION>>> clients;
 
+class NPC : public BaseObject {
+public:
+	NPC() : BaseObject(), last_move_timestamp_(std::chrono::system_clock::now()) {}
+	std::chrono::time_point<std::chrono::system_clock> last_move_timestamp_; // NPC의 마지막 이동 시간 기록
+	void heartbeat()
+	{
+		do_random_move();
+	}
+	void do_timer_move()
+	{
+		do_random_move();
+		if (id_ == make_npc_id(20000))
+		{
+			auto delay = std::chrono::system_clock::now() - last_move_timestamp_;
+			std::cout << "NPC " << id_ << " moved. Time since last move: " << std::chrono::duration_cast<std::chrono::milliseconds>(delay).count() << " ms\n";
+		}
 
+		last_move_timestamp_ = std::chrono::system_clock::now();
+	}
+	void do_random_move()
+	{
+		std::unordered_set<int> old_vl;
+		for (auto id : sector.get_objects_nearby_sector(x_, y_))
+		{
+			if (is_npc_id(id)) continue; // NPCs don't need to be tracked in visible_players for this example
+			std::shared_ptr<SESSION> s = clients[id].load();
+			if (!s || s->state_ != client_state::playing) continue;
+			old_vl.insert(id);
+		}
+
+		int old_x = x_;
+		int old_y = y_;
+		switch (rand() % 4) {
+		case 0: if (x_ < (WORLD_WIDTH - 1)) x_++; break;
+		case 1: if (x_ > 0) x_--; break;
+		case 2: if (y_ < (WORLD_HEIGHT - 1)) y_++; break;
+		case 3:if (y_ > 0) y_--; break;
+		}
+
+		sector.move_object(id_, old_x, old_y, x_, y_);
+		std::unordered_set<int> new_vl;
+		for (auto id : sector.get_objects_nearby_sector(x_, y_))
+		{
+			if (is_npc_id(id)) continue; // NPCs don't need to be tracked in visible_players for this example
+			std::shared_ptr<SESSION> s = clients[id].load();
+			if (!s || s->state_ != client_state::playing) continue;
+			new_vl.insert(id);
+		}
+
+		for (auto& id : new_vl)
+		{
+			if (!old_vl.contains(id))
+			{
+				std::shared_ptr<SESSION> s = clients[id].load();
+				if (s) s->send_add_player(id_);
+			}
+			else
+			{
+				std::shared_ptr<SESSION> s = clients[id].load();
+				if (s && s->state_ == client_state::playing)
+				{
+					s->send_move_packet(id_, MOVE_COOL_TIME);
+				}
+			}
+		}
+		for (auto& id : old_vl)
+		{
+			if (!new_vl.contains(id))
+			{
+				std::shared_ptr<SESSION> s = clients[id].load();
+				if (s) s->send_remove_player(id_);
+			}
+		}
+
+	}
+};
+
+tbb::concurrent_unordered_map<int, std::atomic<std::shared_ptr<NPC>>> npcs;
+
+
+bool can_see(int from_id, int to_id)
+{
+	int16_t from_x, from_y, to_x, to_y;
+
+	if (is_npc_id(from_id))
+	{
+		auto from_npc = npcs[from_id].load();
+		from_x = from_npc->x_;
+		from_y = from_npc->y_;
+	}
+	else
+	{
+		auto from_session = clients[from_id].load();
+		if (!from_session || from_session->state_ != client_state::playing) return false;
+		from_x = from_session->player_->x_;
+		from_y = from_session->player_->y_;
+	}
+
+	if (is_npc_id(to_id))
+	{
+		auto to_npc = npcs[to_id].load();
+		to_x = to_npc->x_;
+		to_y = to_npc->y_;
+	}
+	else
+	{
+		auto to_session = clients[to_id].load();
+		if (!to_session || to_session->state_ != client_state::playing) return false;
+		to_x = to_session->player_->x_;
+		to_y = to_session->player_->y_;
+	}
+
+	if (std::abs(from_x - to_x) > VIEW_RANGE)
+	{
+		return false;
+	}
+	return std::abs(from_y - to_y) <= VIEW_RANGE;
+}
 
 bool SESSION::proccess_packet(unsigned char* buff)
 {
-	packet_type type = *reinterpret_cast<packet_type*>(&buff[1]);
+	PACKET_TYPE type = *reinterpret_cast<PACKET_TYPE*>(&buff[1]);
 	switch (type)
 	{
-	case packet_type::C2S_LOGIN:
+	case PACKET_TYPE::C2S_LOGIN:
 	{
-		c2s_login* p = reinterpret_cast<c2s_login*>(buff);
-		strncpy_s(player_->userName_, p->userName, MAX_NAME_LEN);
+		C2S_Login* p = reinterpret_cast<C2S_Login*>(buff);
+		strncpy_s(player_->userName_, p->username, MAX_NAME_LEN);
 		state_ = client_state::playing;
 		sector.add_object(id_, player_->x_, player_->y_); // 섹터에 플레이어 추가
 		send_avatar_info();
@@ -402,11 +524,18 @@ bool SESSION::proccess_packet(unsigned char* buff)
 		broadcast_new_player(id_);
 		break;
 	}
-	case packet_type::C2S_MOVE:
+	case PACKET_TYPE::C2S_MOVE:
 	{
-		c2s_move* packet = reinterpret_cast<c2s_move*>(buff);
-		int16_t dx = packet->dir.x;
-		int16_t dy = packet->dir.y;
+		C2S_Move* packet = reinterpret_cast<C2S_Move*>(buff);
+		int16_t dx = 0;
+		int16_t dy = 0;
+		switch (packet->dir)
+		{
+		case DIRECTION::UP:    dy = -1; break;
+		case DIRECTION::DOWN:  dy = 1;  break;
+		case DIRECTION::LEFT:  dx = -1; break;
+		case DIRECTION::RIGHT: dx = 1;  break;
+		}
 
 		int16_t old_x = player_->x_;
 		int16_t old_y = player_->y_;
@@ -432,7 +561,7 @@ bool SESSION::proccess_packet(unsigned char* buff)
 
 			// NPCs check
 			if (is_npc_id(id)) {
-				auto npc = npcs[id];
+				auto npc = npcs[id].load();
 				if (is_visible(npc->x_, npc->y_)) {
 					new_visible_players.insert(id);
 				}
@@ -450,21 +579,21 @@ bool SESSION::proccess_packet(unsigned char* buff)
 				new_visible_players.insert(id);
 			}
 		}
-		send_move_packet(id_, packet->timestamp);
+		send_move_packet(id_, packet->move_time);
 
 		for (auto& id : new_visible_players)
 		{
 			if (!old_view.contains(id))
 			{
 				if (npcs.contains(id)) {
-					auto npc = npcs[id];
-					s2c_add_npc add_pkt;
+					auto npc = npcs[id].load();
+					S2C_AddPlayer add_pkt;
 					add_pkt.size = sizeof(add_pkt);
-					add_pkt.type = packet_type::S2C_ADD_NPC;
-					add_pkt.id = id;
+					add_pkt.type = PACKET_TYPE::S2C_ADD_PLAYER;
+					add_pkt.playerId = id;
 					add_pkt.x = npc->x_;
 					add_pkt.y = npc->y_;
-					strcpy_s(add_pkt.npcName, npc->userName_);
+					strcpy_s(add_pkt.username, npc->userName_);
 					do_send(add_pkt.size, reinterpret_cast<char*>(&add_pkt));
 
 					visible_players_mutex.lock();
@@ -483,7 +612,7 @@ bool SESSION::proccess_packet(unsigned char* buff)
 					std::shared_ptr<SESSION> s = clients[id].load();
 					if (s && s->state_ == client_state::playing)
 					{
-						s->send_move_packet(id_, packet->timestamp);
+						s->send_move_packet(id_, packet->move_time);
 					}
 				}
 			}
@@ -494,10 +623,10 @@ bool SESSION::proccess_packet(unsigned char* buff)
 			if (!new_visible_players.contains(id))
 			{
 				if (npcs.contains(id)) {
-					s2c_remove_npc remove_pkt;
+					S2C_RemovePlayer remove_pkt;
 					remove_pkt.size = sizeof(remove_pkt);
-					remove_pkt.type = packet_type::S2C_REMOVE_NPC;
-					remove_pkt.id = id;
+					remove_pkt.type = PACKET_TYPE::S2C_REMOVE_PLAYER;
+					remove_pkt.playerId = id;
 					do_send(remove_pkt.size, reinterpret_cast<char*>(&remove_pkt));
 
 					visible_players_mutex.lock();
@@ -522,20 +651,32 @@ bool SESSION::proccess_packet(unsigned char* buff)
 	return true;
 
 }
-
-
 void SESSION::send_move_packet(int move_player_id, uint32_t timestamp)
 {
+	if (is_npc_id(move_player_id)) {
+		auto npc = npcs[move_player_id].load();
+		if (!npc) return;
+		S2C_MovePlayer move_packet;
+		move_packet.size = sizeof(S2C_MovePlayer);
+		move_packet.type = PACKET_TYPE::S2C_MOVE_PLAYER;
+		move_packet.playerId = move_player_id;
+		move_packet.x = npc->x_;
+		move_packet.y = npc->y_;
+		move_packet.move_time = timestamp;
+		do_send(move_packet.size, reinterpret_cast<char*>(&move_packet));
+		return;
+	}
+
 	std::shared_ptr<SESSION> session = clients[move_player_id].load();
 	if (!session || !session->player_) return;
 
-	s2c_player_move move_packet;
-	move_packet.size = sizeof(s2c_player_move);
-	move_packet.type = packet_type::S2C_PLAYER_MOVE;
-	move_packet.id = move_player_id;
+	S2C_MovePlayer move_packet;
+	move_packet.size = sizeof(S2C_MovePlayer);
+	move_packet.type = PACKET_TYPE::S2C_MOVE_PLAYER;
+	move_packet.playerId = move_player_id;
 	move_packet.x = session->player_->x_;
 	move_packet.y = session->player_->y_;
-	move_packet.timestamp = timestamp;
+	move_packet.move_time = timestamp;
 	do_send(move_packet.size, reinterpret_cast<char*>(&move_packet));
 }
 void SESSION::send_add_player(int player_id)
@@ -543,11 +684,11 @@ void SESSION::send_add_player(int player_id)
 	std::shared_ptr<SESSION> session = clients[player_id].load();
 	if (!session || !session->player_) return;
 
-	s2c_add_player add_packet;
-	add_packet.size = sizeof(s2c_add_player);
-	add_packet.type = packet_type::S2C_ADD_PLAYER;
-	add_packet.id = player_id;
-	strncpy_s(add_packet.userName, session->player_->userName_, MAX_NAME_LEN);
+	S2C_AddPlayer add_packet;
+	add_packet.size = sizeof(S2C_AddPlayer);
+	add_packet.type = PACKET_TYPE::S2C_ADD_PLAYER;
+	add_packet.playerId = player_id;
+	strncpy_s(add_packet.username, session->player_->userName_, MAX_NAME_LEN);
 	add_packet.x = session->player_->x_;
 	add_packet.y = session->player_->y_;
 
@@ -559,9 +700,8 @@ void SESSION::send_add_player(int player_id)
 	}
 	visible_players.insert(player_id);
 	visible_players_mutex.unlock();
-	do_send(sizeof(s2c_add_player), reinterpret_cast<char*>(&add_packet));
+	do_send(sizeof(S2C_AddPlayer), reinterpret_cast<char*>(&add_packet));
 }
-
 void SESSION::send_already_spawn_players()
 {
 	auto object_ids_nearby_sector = sector.get_objects_nearby_sector(player_->x_, player_->y_);
@@ -570,15 +710,15 @@ void SESSION::send_already_spawn_players()
 		if (id != this->id_)
 		{
 			if (npcs.count(id)) {
-				auto npc = npcs[id];
+				auto npc = npcs[id].load();
 				if (is_visible(npc->x_, npc->y_)) {
-					s2c_add_npc add_pkt;
+					S2C_AddPlayer add_pkt;
 					add_pkt.size = sizeof(add_pkt);
-					add_pkt.type = packet_type::S2C_ADD_NPC;
-					add_pkt.id = id;
+					add_pkt.type = PACKET_TYPE::S2C_ADD_PLAYER;
+					add_pkt.playerId = id;
 					add_pkt.x = npc->x_;
 					add_pkt.y = npc->y_;
-					strcpy_s(add_pkt.npcName, npc->userName_);
+					strcpy_s(add_pkt.username, npc->userName_);
 					do_send(add_pkt.size, reinterpret_cast<char*>(&add_pkt));
 
 					visible_players_mutex.lock();
@@ -597,30 +737,17 @@ void SESSION::send_already_spawn_players()
 	}
 }
 
+
+
+
 void broadcast_new_player(int new_player_id)
 {
 	auto new_player_session = clients[new_player_id].load();
 	if (!new_player_session || !new_player_session->player_) return;
 
 	auto object_ids_nearby_sector = sector.get_objects_nearby_sector(new_player_session->player_->x_, new_player_session->player_->y_);
-	for (auto& id : object_ids_nearby_sector)
-	{
-		if (id != new_player_id)
-		{
-			if (npcs.count(id)) continue; // NPCs don't receive broadcasts
-
-			std::shared_ptr<SESSION> o = clients[id].load();
-		}
-	}
-}
-// Fix broadcast_new_player and others
-void broadcast_new_player_fixed(int new_player_id) {
-	auto new_player_session = clients[new_player_id].load();
-	if (!new_player_session || !new_player_session->player_) return;
-
-	auto object_ids_nearby_sector = sector.get_objects_nearby_sector(new_player_session->player_->x_, new_player_session->player_->y_);
 	for (auto& id : object_ids_nearby_sector) {
-		if (id != new_player_id && !npcs.count(id)) {
+		if (id != new_player_id && is_player_id(id)) {
 			std::shared_ptr<SESSION> o = clients[id].load();
 			if (nullptr == o || !o->player_) continue;
 			if (false == o->is_visible(new_player_session->player_->x_, new_player_session->player_->y_)) continue;
@@ -629,7 +756,6 @@ void broadcast_new_player_fixed(int new_player_id) {
 		}
 	}
 }
-
 void broadcast_player_remove_packet(int player_id)
 {
 	auto removed_player = clients[player_id].load();
@@ -648,17 +774,16 @@ void broadcast_player_remove_packet(int player_id)
 }
 void send_login_fail(SOCKET client, const char* text)
 {
-	s2c_login_ack ack_packet;
-	ack_packet.size = sizeof(s2c_login_ack);
-	ack_packet.type = packet_type::S2C_LOGIN_ACK;
+	S2C_LoginResult ack_packet;
+	ack_packet.size = sizeof(S2C_LoginResult);
+	ack_packet.type = PACKET_TYPE::S2C_LOGIN_RESULT;
 	ack_packet.success = false;
-	strncpy_s(ack_packet.msg, text, sizeof(ack_packet.msg));
+	strncpy_s(ack_packet.message, text, sizeof(ack_packet.message));
 	WSABUF wsabuf;
 	wsabuf.buf = reinterpret_cast<char*>(&ack_packet);
-	wsabuf.len = sizeof(s2c_login_ack);
+	wsabuf.len = sizeof(S2C_LoginResult);
 	WSASend(client, &wsabuf, 1, 0, 0, nullptr, nullptr);
 }
-
 void client_disconnect(int client_id)
 {
 	std::cout << "client[" << client_id << "] Disconnected.\n";
@@ -674,7 +799,8 @@ void client_disconnect(int client_id)
 }
 void npc_initialize()
 {
-	for (int i = 0; i < MAX_NPC_COUNT; ++i)
+
+	for (int i = 0; i < MAX_NPCS; ++i)
 	{
 		int npc_id = make_npc_id(npc_index++);
 		auto npc = std::make_shared<NPC>();
@@ -685,9 +811,172 @@ void npc_initialize()
 		strcpy_s(npc->userName_, npc_name.c_str());
 		npcs[npc_id] = npc;
 		sector.add_object(npc_id, npc->x_, npc->y_); // 섹터에 NPC 추가
-		timer_queue.push({ npc_id, std::chrono::system_clock::now() + std::chrono::milliseconds(MOVE_COOL_TIME), EVENT_MOVE, -1 });
+		timer_queue.push({ npc_id, 
+			std::chrono::system_clock::now()
+			+ std::chrono::milliseconds(MOVE_COOL_TIME)
+			+ std::chrono::milliseconds(rand() % MOVE_COOL_TIME_VARIATION),
+			EVENT_MOVE,
+			-1 });
 	}
 }
+
+void ai_thread()
+{
+	using namespace std::chrono;
+	while (true)
+	{
+		auto current_time = system_clock::now();
+		int elapsed_time = 1000;
+		for (auto& [npc_id, atomic_npc] : npcs)
+		{
+			auto npc = atomic_npc.load();
+			if (!npc) continue;
+			auto duration = duration_cast<milliseconds>(current_time - npc->last_move_timestamp_).count();
+			if (duration >= MOVE_COOL_TIME)
+			{
+				npc->heartbeat();
+				npc->last_move_timestamp_ = current_time;
+				if (duration > elapsed_time)
+				{
+					elapsed_time++;
+				}
+				else
+					elapsed_time--;
+
+			}
+		}
+		std::cout << "AI Thread: NPCs moved. Elapsed Time: " << elapsed_time << " ms\n";
+		auto end_time = system_clock::now();
+		auto elapsed = duration_cast<milliseconds>(end_time - current_time).count();
+
+		for (auto& [npc_id, atomic_npc] : npcs)
+		{
+			auto npc = atomic_npc.load();
+			if (!npc) continue;
+			auto nearby_players = sector.get_objects_nearby_sector(npc->x_, npc->y_);
+			for (auto& player_id : nearby_players)
+			{
+				if (npcs.count(player_id)) continue; // NPC는 패킷을 받지 않음
+				std::shared_ptr<SESSION> session = clients[player_id].load();
+				if (!session || session->state_ != client_state::playing) continue;
+				if (session->is_visible(npc->x_, npc->y_))
+				{
+					S2C_MovePlayer move_packet;
+					move_packet.size = sizeof(move_packet);
+					move_packet.type = PACKET_TYPE::S2C_MOVE_PLAYER;
+					move_packet.playerId = npc_id;
+					move_packet.x = npc->x_;
+					move_packet.y = npc->y_;
+					session->do_send(sizeof(move_packet), reinterpret_cast<char*>(&move_packet));
+				}
+			}
+		}
+		if (elapsed < 5)
+		{
+			std::this_thread::sleep_for(milliseconds(10)); // AI 스레드의 CPU 사용량을 줄이기 위해 잠시 대기
+		}
+	}
+}
+
+void HeartBeat_thread()
+{
+	using namespace std::chrono;
+
+	while (true) {
+		auto start_time = system_clock::now();
+		for (auto& [id, atomic_npc] : npcs) {
+			auto npc = atomic_npc.load();
+			if (npc) {
+				npc->heartbeat();
+			}
+		}
+		auto end_time = system_clock::now();
+		auto elapsed = end_time - start_time;
+		if (elapsed < milliseconds(MOVE_COOL_TIME)) {
+			std::this_thread::sleep_for(milliseconds(MOVE_COOL_TIME) - elapsed);
+		}
+
+		std::cout << "Elapsed Time : "
+			<< duration_cast<milliseconds>(elapsed).count()
+			<< "ms.\n";
+	}
+}
+
+void timer_thread()
+{
+	using namespace std::chrono;
+	long long elasped_time = 1000;
+	auto last_send_time = system_clock::now();
+	while (true)
+	{
+		event_type ev;
+		if (timer_queue.try_pop(ev))
+		{
+			auto now = system_clock::now();
+			if (now >= ev.wakeup_time)
+			{
+				switch (ev.event_id)
+				{
+				case EVENT_MOVE:
+					{
+						auto npc = npcs[ev.obj_id].load();
+						if (npc) npc->do_random_move();
+						ev.wakeup_time = system_clock::now() + milliseconds(MOVE_COOL_TIME);
+						timer_queue.push(ev);
+					}
+					break;
+				default:
+					std::cout << "Unknown Event Type in Timer Thread!" << std::endl;
+					break;
+				}
+			}
+			else
+			{
+				timer_queue.push(ev); // 아직 실행 시간이 안된 이벤트는 다시 큐에 넣음
+				std::this_thread::sleep_for(milliseconds(1)); // CPU 사용량을 줄이기 위해 잠시 대기
+			}
+		}
+		std::this_thread::sleep_for(milliseconds(1)); // 이벤트가 없을 때 CPU 사용량을 줄이기 위해 잠시 대기
+	}
+
+}
+
+void timer_thread2()
+{
+	using namespace std::chrono;
+	while (true)
+	{
+		event_type ev;
+		if (timer_queue.try_pop(ev))
+		{
+			auto now = system_clock::now();
+			if (now >= ev.wakeup_time)
+			{
+				switch (ev.event_id)
+				{
+				case EVENT_MOVE:
+					{
+						EXP_OVER* move_over = new EXP_OVER;
+						move_over->type = io_type::npc_move;
+						PostQueuedCompletionStatus(h_iocp, -1, ev.obj_id, &move_over->over);
+					}
+					break;
+				default:
+					std::cout << "Unknown Event Type in Timer Thread!" << std::endl;
+					break;
+				}
+			}
+			else
+			{
+				timer_queue.push(ev); // 아직 실행 시간이 안된 이벤트는 다시 큐에 넣음
+				std::this_thread::sleep_for(milliseconds(1)); // CPU 사용량을 줄이기 위해 잠시 대기
+			}
+		}
+		
+	}
+}
+
+
 void worker_thread()
 {
 	while (true)
@@ -795,150 +1084,28 @@ void worker_thread()
 			delete o;
 			break;
 		}
+		case io_type::npc_move:
+		{
+			auto npc = npcs[id].load();
+			if (npc)
+			{
+				npc->do_timer_move();
+				event_type ev;
+				ev.obj_id = id;
+				ev.event_id = EVENT_MOVE;
+				ev.wakeup_time = std::chrono::system_clock::now() + std::chrono::milliseconds(MOVE_COOL_TIME) + std::chrono::milliseconds(rand() % MOVE_COOL_TIME_VARIATION);
+				ev.target_id = -1;
+				timer_queue.push(ev);
+			}
+			delete o;
+			break;
+		}
 		default:
 			std::cout << "Unknown IO Type!" << std::endl;
 			exit(-1);
 			break;
 		}
 	}
-}
-
-void npc_random_move(int id)
-{
-	auto npc = npcs[id];
-	if (!npc) return;
-	int16_t old_x = npc->x_;
-	int16_t old_y = npc->y_;
-	int16_t dx = (rand() % 3) - 1; // -1, 0, or 1
-	int16_t dy = (rand() % 3) - 1; // -1, 0, or 1
-	int16_t new_x = npc->x_ + dx;
-	int16_t new_y = npc->y_ + dy;
-	if (new_x >= 0 && new_x < WORLD_WIDTH)
-	{
-		npc->x_ = new_x;
-	}
-	if (new_y >= 0 && new_y < WORLD_HEIGHT)
-	{
-		npc->y_ = new_y;
-	}
-	sector.move_object(id, old_x, old_y, npc->x_, npc->y_);
-
-}
-
-void ai_thread()
-{
-	using namespace std::chrono;
-	while (true)
-	{
-		auto current_time = system_clock::now();
-		int elapsed_time = 1000;
-		for (auto& [npc_id, npc] : npcs)
-		{
-			if (!npc) continue;
-			auto duration = duration_cast<milliseconds>(current_time - npc->last_move_timestamp_).count();
-			if (duration >= MOVE_COOL_TIME)
-			{
-				npc_random_move(npc_id);
-				npc->last_move_timestamp_ = current_time;
-				if (duration > elapsed_time)
-				{
-					elapsed_time++;
-				}
-				else
-					elapsed_time--;
-
-			}
-		}
-		std::cout << "AI Thread: NPCs moved. Elapsed Time: " << elapsed_time << " ms\n";
-		auto end_time = system_clock::now();
-		auto elapsed = duration_cast<milliseconds>(end_time - current_time).count();
-
-		for (auto& [npc_id, npc] : npcs)
-		{
-			if (!npc) continue;
-			auto nearby_players = sector.get_objects_nearby_sector(npc->x_, npc->y_);
-			for (auto& player_id : nearby_players)
-			{
-				if (npcs.count(player_id)) continue; // NPC는 패킷을 받지 않음
-				std::shared_ptr<SESSION> session = clients[player_id].load();
-				if (!session || session->state_ != client_state::playing) continue;
-				if (session->is_visible(npc->x_, npc->y_))
-				{
-					s2c_npc_move move_packet;
-					move_packet.size = sizeof(move_packet);
-					move_packet.type = packet_type::S2C_NPC_MOVE;
-					move_packet.id = npc_id;
-					move_packet.x = npc->x_;
-					move_packet.y = npc->y_;
-					session->do_send(sizeof(move_packet), reinterpret_cast<char*>(&move_packet));
-				}
-			}
-		}
-		if (elapsed < 5)
-		{
-			std::this_thread::sleep_for(milliseconds(10)); // AI 스레드의 CPU 사용량을 줄이기 위해 잠시 대기
-		}
-	}
-}
-
-
-
-void timer_thread()
-{
-	int elasped_time = 1000;
-	auto last_send_time = std::chrono::steady_clock::now();
-	while (true)
-	{
-		while (true)
-		{
-			auto now = std::chrono::system_clock::now();
-			event_type event;
-			if (not timer_queue.try_pop(event))
-			{
-				break;
-			}
-			if (event.wakeup_time > now)
-			{
-				timer_queue.push(event); // 아직 실행할 시간이 아니므로 다시 큐에 넣음
-				break;
-			}
-			int delay = std::chrono::duration_cast<std::chrono::milliseconds>(now - event.wakeup_time).count();
-			if (delay > elasped_time)
-			{
-				elasped_time++;
-			}
-			else
-			{
-				elasped_time--;
-			}
-			npcs[event.obj_id]->do_timer_move();
-			auto nearby_players = sector.get_objects_nearby_sector(npcs[event.obj_id]->x_, npcs[event.obj_id]->y_);
-			for (auto& player_id : nearby_players)
-			{
-				if (is_npc_id(player_id)) continue; // NPC는 패킷을 받지 않음
-				std::shared_ptr<SESSION> session = clients[player_id].load();
-				if (!session || session->state_ != client_state::playing) continue;
-				if (session->is_visible(npcs[event.obj_id]->x_, npcs[event.obj_id]->y_))
-				{
-					s2c_npc_move move_packet;
-					move_packet.size = sizeof(move_packet);
-					move_packet.type = packet_type::S2C_NPC_MOVE;
-					move_packet.id = event.obj_id;
-					move_packet.x = npcs[event.obj_id]->x_;
-					move_packet.y = npcs[event.obj_id]->y_;
-					session->do_send(sizeof(move_packet), reinterpret_cast<char*>(&move_packet));
-				}
-			}
-		}
-		std::this_thread::yield();
-		if (std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - last_send_time).count()
-			>= 1000)
-		{
-			std::cout << "Timer Thread: Processed timer events. Elapsed Time: " << elasped_time << " ms\n";
-			last_send_time = std::chrono::steady_clock::now();
-		}
-	}
-	
 }
 
 int main()
@@ -970,7 +1137,7 @@ int main()
 	AcceptEx(server_socket, accept_over.accept_socket, &accept_over.buff, 0,
 		sizeof(SOCKADDR_IN) + 16, sizeof(SOCKADDR_IN) + 16, NULL, &accept_over.over);
 
-	std::thread ai_thread_handle(timer_thread);
+	std::thread ai_thread_handle(timer_thread2);
 
 	std::vector<std::thread> worker_threads;
 	for (unsigned int i = 0; i < std::thread::hardware_concurrency(); ++i)

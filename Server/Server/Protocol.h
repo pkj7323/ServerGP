@@ -106,7 +106,7 @@ constexpr int WORLD_WIDTH = 2000;
 constexpr int WORLD_HEIGHT = 2000;
 constexpr int MAX_PLAYERS = 10000;
 constexpr int NPC_ID_START = MAX_PLAYERS;
-constexpr int MAX_NPCS = 20000;
+constexpr int MAX_NPCS = 10000;
 constexpr int MAX_NAME_LEN = 20;
 
 enum PACKET_TYPE { C2S_LOGIN, C2S_MOVE, S2C_LOGIN_RESULT, S2C_AVATAR_INFO, S2C_ADD_PLAYER, S2C_REMOVE_PLAYER, S2C_MOVE_PLAYER };
