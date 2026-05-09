@@ -1,0 +1,642 @@
+#include <iostream>
+#include <WS2tcpip.h>
+#include <array>
+#pragma comment(lib, "WS2_32.lib")
+#include <MSWSock.h>
+#pragma comment(lib, "MSWSock.lib")
+#include <vector>
+
+#include "Protocol.h"
+#include <tbb/concurrent_unordered_map.h>
+#include <unordered_set>
+
+void error_display(const std::wstring& msg, int err_no)
+{
+	WCHAR* lpMsgBuf;
+	FormatMessage(
+		FORMAT_MESSAGE_ALLOCATE_BUFFER |
+		FORMAT_MESSAGE_FROM_SYSTEM,
+		NULL, err_no,
+		MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
+		(LPTSTR)&lpMsgBuf, 0, NULL);
+	std::wcout << msg;
+	std::wcout << L"=== 에러 " << lpMsgBuf << std::endl;
+	__debugbreak();
+	// 디버깅 용
+	LocalFree(lpMsgBuf);
+}
+constexpr int BUF_SIZE = 1024;
+constexpr int VIEW_RANGE = 5;
+constexpr int MAX_NPC_COUNT = 200000;
+std::atomic<int> player_index = 1;
+std::atomic<int> npc_index = 1;
+
+constexpr int ID_TYPE_PLAYER = 0x00000000;
+constexpr int ID_TYPE_NPC = 0x40000000;
+constexpr int ID_INDEX_MASK = 0x3FFFFFFF;
+
+inline int make_player_id(int index)
+{
+	return ID_TYPE_PLAYER | (index & ID_INDEX_MASK);
+}
+
+inline int make_npc_id(int index)
+{
+	return ID_TYPE_NPC | (index & ID_INDEX_MASK);
+}
+HANDLE h_iocp;
+SOCKET server_socket;
+enum class io_type
+{
+	send,
+	recv,
+	accept,
+	count
+};
+
+
+
+class EXP_OVER {
+public:
+	WSAOVERLAPPED	over;
+	io_type			type = io_type::count;
+	WSABUF			wsabuffer;
+	char			buff[BUF_SIZE];
+	SOCKET			accept_socket;
+	EXP_OVER()
+	{
+		ZeroMemory(&over, sizeof(over));
+		wsabuffer.buf = buff;
+		wsabuffer.len = BUF_SIZE;
+	}
+	EXP_OVER(io_type type) : type{ type }
+	{
+		ZeroMemory(&over, sizeof(over));
+		wsabuffer.buf = buff;
+		wsabuffer.len = BUF_SIZE;
+	}
+
+};
+
+void broadcast_new_player(int new_player_id);
+void broadcast_player_remove_packet(int player_id);
+void client_disconnect(int client_id);
+
+enum class client_state
+{
+	connected,
+	playing,
+	logout
+};
+
+class BaseObject {
+public:
+	int				id_;
+	int16_t 		x_;
+	int16_t 		y_;
+	char			userName_[MAX_NAME_LEN];
+
+	BaseObject() : id_(-1), x_{ 0 }, y_{ 0 }, userName_{} {}
+	virtual ~BaseObject() = default;
+};
+
+class Player : public BaseObject {
+public:
+	Player() : BaseObject() {}
+};
+
+class NPC : public BaseObject {
+public:
+	NPC() : BaseObject() {}
+};
+
+tbb::concurrent_unordered_map<int, std::shared_ptr<NPC>> npcs;
+
+class SESSION {
+public:
+	SOCKET			client_;
+	int				id_;
+	EXP_OVER		recv_over_;
+	int				prev_recv_count_ = 0;
+	client_state	state_;
+
+	std::shared_ptr<Player> player_; // 세션이 플레이어 객체를 소유함
+
+	std::unordered_set<int> visible_players; // 현재 보이는 플레이어 ID 목록
+	std::mutex visible_players_mutex; // 보이는 플레이어 목록 보호용 뮤텍스
+
+	SESSION()
+	{
+		prev_recv_count_ = 0;
+		state_ = client_state::connected;
+		id_ = 999;
+		client_ = INVALID_SOCKET;
+		recv_over_.type = io_type::recv;
+		player_ = std::make_shared<Player>();
+	}
+	~SESSION()
+	{
+		if (state_ == client_state::playing || state_ == client_state::connected)
+		{
+			closesocket(client_);
+		}
+
+	}
+	void init()
+	{
+		prev_recv_count_ = 0;
+		state_ = client_state::connected;
+		id_ = 999;
+		closesocket(client_);
+		client_ = INVALID_SOCKET;
+		if (player_) {
+			player_->id_ = -1;
+			player_->x_ = 0;
+			player_->y_ = 0;
+			ZeroMemory(player_->userName_, sizeof(player_->userName_));
+		}
+		ZeroMemory(&recv_over_.over, sizeof(WSAOVERLAPPED));
+		recv_over_.type = io_type::recv;
+		recv_over_.wsabuffer.buf = recv_over_.buff; // 본인의 버퍼 주소로 재설정
+		recv_over_.wsabuffer.len = BUF_SIZE;
+	}
+	void do_recv()
+	{
+		DWORD recv_flag = 0;
+		recv_over_.over = {};
+		// 남은 데이터(prev_recv_count) 뒤부터 이어 받도록 수정
+		recv_over_.wsabuffer.buf = recv_over_.buff + prev_recv_count_;
+		recv_over_.wsabuffer.len = BUF_SIZE - prev_recv_count_;
+		WSARecv(client_, &recv_over_.wsabuffer, 1, 0, &recv_flag, &recv_over_.over, nullptr);
+	}
+	void do_send(int num_bytes, char* mess)
+	{
+		EXP_OVER* o = new EXP_OVER(io_type::send);
+		o->wsabuffer.len = num_bytes;
+		memcpy(o->wsabuffer.buf, mess, num_bytes);
+		WSASend(client_, &o->wsabuffer, 1, 0, 0, &o->over, nullptr);
+	}
+
+	bool proccess_packet(unsigned char* buff);
+
+
+	void send_avatar_info()
+	{
+		s2c_avatar_info info_packet;
+		info_packet.size = sizeof(s2c_avatar_info);
+		info_packet.type = packet_type::S2C_AVATAR_INFO;
+		info_packet.id = id_;
+		info_packet.x = player_->x_;
+		info_packet.y = player_->y_;
+		do_send(sizeof(s2c_avatar_info), reinterpret_cast<char*>(&info_packet));
+	}
+
+
+	void send_login_success()
+	{
+		s2c_login_ack ack_packet;
+		ack_packet.size = sizeof(s2c_login_ack);
+		ack_packet.type = packet_type::S2C_LOGIN_ACK;
+		ack_packet.success = true;
+		strcpy_s(ack_packet.msg, "Login successful.");
+		do_send(ack_packet.size, reinterpret_cast<char*>(&ack_packet));
+	}
+	void send_remove_player(int player_id)
+	{
+		s2c_remove_player packet;
+		packet.size = sizeof(s2c_remove_player);
+		packet.type = packet_type::S2C_REMOVE_PLAYER;
+		packet.id = player_id;
+		visible_players_mutex.lock();
+		if (!visible_players.contains(player_id))
+		{
+			visible_players_mutex.unlock();
+			return;
+		}
+		visible_players.erase(player_id);
+		visible_players_mutex.unlock();
+		do_send(packet.size, reinterpret_cast<char*>(&packet));
+	}
+	void send_move_packet(int mover, uint32_t timestamp);
+	void send_add_player(int player_id);
+	bool is_visible(int16_t x, int16_t y)
+	{
+		return abs(x - player_->x_) <= VIEW_RANGE && abs(y - player_->y_) <= VIEW_RANGE;
+	}
+	void send_already_spawn_players();
+	void send_already_spawn_npcs()
+	{
+		for (auto& [npc_id, npc] : npcs)
+		{
+			if (!npc) continue;
+			if (false == is_visible(npc->x_, npc->y_)) continue;
+			s2c_add_npc add_packet;
+			add_packet.size = sizeof(s2c_add_npc);
+			add_packet.type = packet_type::S2C_ADD_NPC;
+			add_packet.id = npc_id;
+			strncpy_s(add_packet.npcName, npc->userName_, MAX_NAME_LEN);
+			add_packet.x = npc->x_;
+			add_packet.y = npc->y_;
+			do_send(sizeof(s2c_add_npc), reinterpret_cast<char*>(&add_packet));
+		}
+	}
+};
+
+tbb::concurrent_unordered_map<int, std::atomic<std::shared_ptr<SESSION>>> clients;
+
+
+
+bool SESSION::proccess_packet(unsigned char* buff)
+{
+	packet_type type = *reinterpret_cast<packet_type*>(&buff[1]);
+	switch (type)
+	{
+	case packet_type::C2S_LOGIN:
+	{
+		c2s_login* p = reinterpret_cast<c2s_login*>(buff);
+		strncpy_s(player_->userName_, p->userName, MAX_NAME_LEN);
+		//std::cout << "Client[" << id_ << "] Login: " << player_->userName_ << std::endl;
+		state_ = client_state::playing;
+		send_avatar_info();
+		send_already_spawn_players();
+		send_already_spawn_npcs();
+		broadcast_new_player(id_);
+		break;
+	}
+	case packet_type::C2S_MOVE:
+	{
+		c2s_move* packet = reinterpret_cast<c2s_move*>(buff);
+		int16_t dx = packet->dir.x;
+		int16_t dy = packet->dir.y;
+
+		int16_t new_x = player_->x_ + dx;
+		int16_t new_y = player_->y_ + dy;
+		if (new_x >= 0 && new_x < WORLD_WIDTH)
+		{
+			player_->x_ = new_x;
+		}
+		if (new_y >= 0 && new_y < WORLD_HEIGHT)
+		{
+			player_->y_ = new_y;
+		}
+		std::unordered_set<int> old_view;
+		{
+			std::lock_guard<std::mutex> lock(visible_players_mutex);
+			old_view = visible_players;
+		}
+
+		std::unordered_set<int> new_visible_players; // 새로 보이는 플레이어 목록
+		//std::cout << "Player[" << id_ << "] moved to (" << player_->x_ << ", " << player_->y_ << ")\n";
+		for (auto& [id, session] : clients)
+		{
+			std::shared_ptr<SESSION> s = session.load();
+			if (nullptr == s) continue;
+			if (s->is_visible(player_->x_, player_->y_))
+			{
+				new_visible_players.insert(id);
+			}
+		}
+		send_move_packet(id_, packet->timestamp);
+
+		for (auto& id : new_visible_players)
+		{
+			if (!old_view.contains(id))
+			{
+				send_add_player(id);
+				std::shared_ptr<SESSION> s = clients[id].load();
+				if (!s)
+				{
+					continue;
+				}
+				s->send_add_player(id_);
+			}
+			else
+			{
+				std::shared_ptr<SESSION> s = clients[id].load();
+				if (!s)
+				{
+					continue;
+				}
+				if (s->state_ == client_state::playing)
+				{
+					s->send_move_packet(id_, packet->timestamp);
+				}
+				
+			}
+		}
+
+		for (auto& id : old_view)
+		{
+			if (!new_visible_players.contains(id))
+			{
+				send_remove_player(id);
+				std::shared_ptr<SESSION> s = clients[id].load();
+				if (!s)
+				{
+					continue;
+				}
+				s->send_remove_player(id_);
+			}
+		}
+		break;
+	}
+
+	default:
+		std::cout << "Unknown Packet Type from Client[" << id_ << "]" << std::endl;
+		return false;
+		break;
+	}
+	return true;
+
+}
+
+
+void SESSION::send_move_packet(int move_player_id, uint32_t timestamp)
+{
+	std::shared_ptr<SESSION> session = clients[move_player_id].load();
+	if (!session || !session->player_) return;
+
+	s2c_player_move move_packet;
+	move_packet.size = sizeof(s2c_player_move);
+	move_packet.type = packet_type::S2C_PLAYER_MOVE;
+	move_packet.id = move_player_id;
+	move_packet.x = session->player_->x_;
+	move_packet.y = session->player_->y_;
+	move_packet.timestamp = timestamp;
+	do_send(move_packet.size, reinterpret_cast<char*>(&move_packet));
+}
+void SESSION::send_add_player(int player_id)
+{
+	std::shared_ptr<SESSION> session = clients[player_id].load();
+	if (!session || !session->player_) return;
+
+	s2c_add_player add_packet;
+	add_packet.size = sizeof(s2c_add_player);
+	add_packet.type = packet_type::S2C_ADD_PLAYER;
+	add_packet.id = player_id;
+	strncpy_s(add_packet.userName, session->player_->userName_, MAX_NAME_LEN);
+	add_packet.x = session->player_->x_;
+	add_packet.y = session->player_->y_;
+	
+	visible_players_mutex.lock();
+	if (visible_players.contains(player_id))
+	{
+		visible_players_mutex.unlock();
+		return;
+	}
+	visible_players.insert(player_id);
+	visible_players_mutex.unlock();
+	do_send(sizeof(s2c_add_player), reinterpret_cast<char*>(&add_packet));
+}
+
+void SESSION::send_already_spawn_players()
+{
+	for (auto& [id, session] : clients)
+	{
+		if (id != this->id_)
+		{
+			std::shared_ptr<SESSION> o = session.load();
+			if (nullptr == o || !o->player_) continue;
+			if (false == is_visible(o->player_->x_, o->player_->y_)) continue;
+			if (client_state::playing == o->state_)
+				send_add_player(id);
+		}
+	}
+}
+
+void broadcast_new_player(int new_player_id)
+{
+	auto new_player_session = clients[new_player_id].load();
+	if (!new_player_session || !new_player_session->player_) return;
+
+	for (auto& [id, session] : clients)
+	{
+		if (id != new_player_id)
+		{
+			std::shared_ptr<SESSION> o = session.load();
+			if (nullptr == o || !o->player_) continue;
+			if (false == o->is_visible(new_player_session->player_->x_, new_player_session->player_->y_)) continue;
+			if (client_state::playing == o->state_)
+				o->send_add_player(new_player_id);
+		}
+	}
+}
+void broadcast_player_remove_packet(int player_id)
+{
+	auto removed_player = clients[player_id].load();
+	if (!removed_player) return;
+
+	for (auto& id : removed_player->visible_players)
+	{
+		if (id != player_id)
+		{
+			std::shared_ptr<SESSION> o = clients[id].load();
+			if (nullptr == o) continue;
+			if (client_state::playing == o->state_)
+				o->send_remove_player(player_id);
+		}
+	}
+}
+
+
+void send_login_fail(SOCKET client, const char* text)
+{
+	s2c_login_ack ack_packet;
+	ack_packet.size = sizeof(s2c_login_ack);
+	ack_packet.type = packet_type::S2C_LOGIN_ACK;
+	ack_packet.success = false;
+	strncpy_s(ack_packet.msg, text, sizeof(ack_packet.msg));
+	WSABUF wsabuf;
+	wsabuf.buf = reinterpret_cast<char*>(&ack_packet);
+	wsabuf.len = sizeof(s2c_login_ack);
+	WSASend(client, &wsabuf, 1, 0, 0, nullptr, nullptr);
+}
+
+void client_disconnect(int client_id)
+{
+	std::cout << "client[" << client_id << "] Disconnected.\n";
+	std::shared_ptr<SESSION> cl = clients[client_id].load();
+	if (nullptr != cl) {
+		cl->state_ = client_state::logout;
+		broadcast_player_remove_packet(cl->id_);
+		closesocket(cl->client_);
+		cl->client_ = INVALID_SOCKET;
+	}
+	clients[client_id].store(nullptr);
+}
+
+void npc_initialize()
+{
+	for (int i = 0; i < MAX_NPC_COUNT; ++i)
+	{
+		int npc_id = make_npc_id(npc_index++);
+		auto npc = std::make_shared<NPC>();
+		npc->id_ = npc_id;
+		npc->x_ = rand() % WORLD_WIDTH;
+		npc->y_ = rand() % WORLD_HEIGHT;
+		strcpy_s(npc->userName_, "NPC");
+		npcs[npc_id] = npc;
+	}
+}
+
+
+void worker_thread()
+{
+	while (true)
+	{
+		DWORD bytes_transferred;
+		ULONG_PTR key;
+		LPOVERLAPPED over;
+		GetQueuedCompletionStatus(h_iocp, &bytes_transferred, &key, &over, INFINITE);
+		EXP_OVER* o = reinterpret_cast<EXP_OVER*>(over);
+		int id = static_cast<int>(key);
+		int num_bytes = static_cast<int>(bytes_transferred);
+		if (over == nullptr)
+		{
+			error_display(L"GQCS Errror: ", WSAGetLastError());
+			if (key == -1) {
+				exit(-1);
+			}
+			client_disconnect(id);
+			continue;
+		}
+		std::shared_ptr<SESSION> session = clients[id].load();
+		if (o->type == io_type::recv && bytes_transferred == 0 && WSAGetLastError() != WSA_IO_PENDING)
+		{
+			client_disconnect(id);
+			continue;
+		}
+		if (o->type == io_type::send && bytes_transferred == 0 && WSAGetLastError() != WSA_IO_PENDING)
+		{
+			client_disconnect(id);
+			delete o; // send 완료 후 오버랩드 객체 삭제
+			continue;
+		}
+		switch (o->type)
+		{
+		case io_type::accept:
+		{
+			//std::cout << "New Client Connected!" << std::endl;
+			int current_id = make_player_id(player_index++);
+			CreateIoCompletionPort((HANDLE)o->accept_socket, h_iocp, current_id, 0);
+			std::shared_ptr<SESSION> new_session = std::make_shared<SESSION>();
+			new_session->id_ = current_id;
+			new_session->client_ = o->accept_socket;
+			new_session->state_ = client_state::connected;
+			if (new_session->player_) {
+				new_session->player_->id_ = current_id;
+				new_session->player_->x_ = rand() % WORLD_WIDTH;
+				new_session->player_->y_ = rand() % WORLD_HEIGHT;
+			}
+			clients.emplace(current_id, new_session);
+			new_session->send_login_success();
+			new_session->do_recv();
+
+
+			o->accept_socket = WSASocket(AF_INET, SOCK_STREAM, 0, NULL, 0, WSA_FLAG_OVERLAPPED);
+			ZeroMemory(&o->over, sizeof(o->over));
+			AcceptEx(server_socket, o->accept_socket, &o->buff, 0,
+				sizeof(SOCKADDR_IN) + 16, sizeof(SOCKADDR_IN) + 16,
+				NULL, &o->over);
+			break;
+		}
+		case io_type::recv:
+		{
+			std::shared_ptr<SESSION> cl = clients[id].load();
+			if (nullptr == cl)
+			{
+				break;
+			}
+			unsigned char* p = reinterpret_cast<unsigned char*>(o->buff);
+			int data_size = num_bytes + cl->prev_recv_count_;
+			bool packet_valid = true;
+			while (data_size > 0)
+			{
+				unsigned char packet_size = p[0];
+				if (packet_size > data_size)
+				{
+					break;
+				}
+				packet_valid = cl->proccess_packet(p);
+				if (!packet_valid)
+				{
+					client_disconnect(id);
+					break;
+				}
+				p += packet_size;
+				data_size -= packet_size;
+			}
+			if (!packet_valid)
+			{
+				break;
+			}
+			if (data_size > 0)
+			{
+				memmove(cl->recv_over_.buff, p, data_size);
+				cl->prev_recv_count_ = data_size;
+			}
+			else
+			{
+				cl->prev_recv_count_ = 0;
+				ZeroMemory(o->buff, sizeof(o->buff));
+			}
+
+			cl->do_recv();
+			break;
+		}
+		case io_type::send:
+		{
+			//packet_type sent_type = (*reinterpret_cast<packet_type*>(&o->wsabuffer.buf[1]));
+			//cout << "Send Complete to Client[" << session.id << "], Bytes Sent: " << bytes_transferred
+			//	<< " Packet Type = " << static_cast<uint16_t>(sent_type) << endl;
+			delete o;
+			break;
+		}
+		default:
+			std::cout << "Unknown IO Type!" << std::endl;
+			exit(-1);
+			break;
+		}
+	}
+}
+
+int main()
+{
+	std::wcout.imbue(std::locale("korean"));
+	WSADATA WSAData;
+	WSAStartup(MAKEWORD(2, 2), &WSAData);
+	server_socket = WSASocket(AF_INET, SOCK_STREAM, 0, NULL, 0, WSA_FLAG_OVERLAPPED);
+
+	SOCKADDR_IN server_addr{};
+	server_addr.sin_family = AF_INET;
+	server_addr.sin_port = htons(PORT);
+	server_addr.sin_addr.S_un.S_addr = INADDR_ANY;
+
+	int64_t ret = bind(server_socket, reinterpret_cast<sockaddr*>(&server_addr), sizeof(server_addr));
+
+	listen(server_socket, SOMAXCONN);
+
+	h_iocp = CreateIoCompletionPort(INVALID_HANDLE_VALUE, NULL, 0, 0);
+	CreateIoCompletionPort((HANDLE)server_socket, h_iocp, 0, 0);
+
+	npc_initialize();
+
+	EXP_OVER accept_over(io_type::accept);
+	accept_over.accept_socket = WSASocket(AF_INET, SOCK_STREAM, 0, NULL, 0, WSA_FLAG_OVERLAPPED);
+	AcceptEx(server_socket, accept_over.accept_socket, &accept_over.buff, 0,
+		sizeof(SOCKADDR_IN) + 16, sizeof(SOCKADDR_IN) + 16, NULL, &accept_over.over);
+
+
+	std::vector<std::thread> worker_threads;
+	for (unsigned int i = 0; i < std::thread::hardware_concurrency(); ++i)
+	{
+		worker_threads.emplace_back(worker_thread);
+	}
+	for (auto& t : worker_threads)
+	{
+		t.join();
+	}
+
+	closesocket(server_socket);
+	WSACleanup();
+}

@@ -1,10 +1,12 @@
+#include <algorithm>
 #include <iostream>
 #include <vector>
 #include <fstream>
 #include "FastNoiseLite.h" // https://github.com/Auburn/FastNoiseLite
 
-constexpr int WORLD_WIDTH = 2000;
-constexpr int WORLD_HEIGHT = 2000;
+
+#include "Protocol.h"
+
 
 // 바이옴 ID (10개)
 enum BiomeType {
@@ -66,7 +68,7 @@ int main() {
 
             // 노이즈 값을 0 ~ 9 사이의 바이옴 ID로 매핑
             int biome = static_cast<int>((bNoise + 1.0f) * 0.5f * 10.0f);
-            if (biome > 9) biome = 9; // Clamp
+			biome = std::min(biome, 9); // Clamp
 
             uint8_t visualID = TILE_GRASS;
             uint8_t collisionFlag = COLLISION_PASSABLE;
