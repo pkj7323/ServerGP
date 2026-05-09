@@ -17,6 +17,8 @@
 #include <string>
 #include <iostream>
 #include <unordered_map>
+#include <array>
+#include <fstream>
 
 #include "Singleton.h"
 #include "Protocol.h"

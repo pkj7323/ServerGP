@@ -6,23 +6,44 @@
 LRESULT CALLBACK window_proc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) {
 	switch (message) {
 	case WM_KEYDOWN: {
-		C2S_Move p;
-		p.size = sizeof(p);
-		p.type = C2S_MOVE;
-		
+		auto gm = GameManager::Instance();
+		if (!gm->players().contains(gm->my_id())) break;
+
+		int curr_x = gm->players()[gm->my_id()].x;
+		int curr_y = gm->players()[gm->my_id()].y;
+
+		short dx = 0;
+		short dy = 0;
+
 		switch (wParam) {
-		case VK_LEFT:  p.dir = LEFT; break;
-		case VK_RIGHT: p.dir = RIGHT; break;
-		case VK_UP:    p.dir = UP; break;
-		case VK_DOWN:  p.dir = DOWN; break;
-		case VK_ESCAPE: GameManager::Instance()->set_running(false); break;
+		case VK_LEFT:  dx = -1; break;
+		case VK_RIGHT: dx = 1;  break;
+		case VK_UP:    dy = 1;  break; // Y-up: 위로 가면 Y 증가 (+1)
+		case VK_DOWN:  dy = -1; break; // Y-up: 아래로 가면 Y 감소 (-1)
+		case VK_ESCAPE: gm->set_running(false); return 0;
+		default: return DefWindowProc(hWnd, message, wParam, lParam);
 		}
 
-		NetworkManager::Instance()->send_packet(&p);
-		
+		// 클라이언트 사이드 충돌 체크 (현재 위치 + 방향)
+		if (gm->can_move(curr_x + dx, curr_y + dy)) {
+
+			// C2S_Move는 방향(dx, dy)을 담아서 서버로 전송
+			C2S_Move p;
+			p.size = sizeof(p);
+			p.type = C2S_MOVE;
+			p.x = dx;
+			p.y = dy;
+			p.move_time = 0;
+
+			NetworkManager::Instance()->send_packet(&p);
+
+			// 참고: S2C_MOVE_OBJECT를 받기 전까지 클라이언트 화면은
+			// 갱신되지 않으므로, 0.5초 쿨타임 처리는 서버가 담당합니다.
+		}
 		return 0;
 	}
-	case WM_DESTROY: GameManager::Instance()->set_running(false); PostQuitMessage(0); return 0;
+	break;
+	case WM_DESTROY: GameManager::Instance()->set_running(false); PostQuitMessage(0); return 0; break;
 	}
 	return DefWindowProc(hWnd, message, wParam, lParam);
 }
@@ -48,6 +69,8 @@ int WINAPI WinMain(HINSTANCE hI, HINSTANCE hP, LPSTR lp, int nS) {
 	auto gm = GameManager::Instance();
 	auto nm = NetworkManager::Instance();
 	auto rm = RenderManager::Instance();
+
+	gm->Init();
 
 	std::string server_ip;
 	std::cout << "Enter server IP (default 127.0.0.1): ";

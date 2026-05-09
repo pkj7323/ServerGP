@@ -46,7 +46,7 @@ int main() {
     // 1. 바이옴 생성을 위한 Cellular (Voronoi) 노이즈 세팅
     FastNoiseLite biomeNoise;
     biomeNoise.SetNoiseType(FastNoiseLite::NoiseType_Cellular);
-    biomeNoise.SetFrequency(0.002f); // 값이 작을수록 바이옴 구역이 넓어짐
+    biomeNoise.SetFrequency(0.005f); // 값이 작을수록 바이옴 구역이 넓어짐
     biomeNoise.SetCellularReturnType(FastNoiseLite::CellularReturnType_CellValue);
 
     // 2. 지형 디테일(물, 땅, 산)을 위한 Perlin 노이즈 세팅
@@ -80,12 +80,12 @@ int main() {
                 else { visualID = TILE_SAND; collisionFlag = COLLISION_PASSABLE; }
             }
             else if (biome == BIOME_SNOW) {
-                if (tNoise < -0.2f) { visualID = TILE_ICE; collisionFlag = COLLISION_BLOCKED; } // 얼어붙은 강
+                if (tNoise < -0.2f) { visualID = TILE_ICE; collisionFlag = COLLISION_PASSABLE; } // 얼어붙은 강
                 else if (tNoise > 0.6f) { visualID = TILE_STONE; collisionFlag = COLLISION_BLOCKED; } // 돌산
                 else { visualID = TILE_SNOW; collisionFlag = COLLISION_PASSABLE; }
             }
             else { // 기본 평원 및 기타
-                if (tNoise < -0.3f) { visualID = TILE_WATER; collisionFlag = COLLISION_BLOCKED; } // 호수/강
+                if (tNoise < -0.3f) { visualID = TILE_WATER; collisionFlag = COLLISION_PASSABLE; } // 호수/강
                 else if (tNoise > 0.5f) { visualID = TILE_STONE; collisionFlag = COLLISION_BLOCKED; } // 산맥
                 else { visualID = TILE_GRASS; collisionFlag = COLLISION_PASSABLE; }
             }

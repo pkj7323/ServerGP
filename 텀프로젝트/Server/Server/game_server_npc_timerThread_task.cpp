@@ -418,10 +418,10 @@ public:
 	}
 	void send_remove_player(int player_id)
 	{
-		S2C_RemovePlayer packet;
-		packet.size = sizeof(S2C_RemovePlayer);
-		packet.type = PACKET_TYPE::S2C_REMOVE_PLAYER;
-		packet.playerId = player_id;
+		S2C_RemoveObject packet;
+		packet.size = sizeof(S2C_RemoveObject);
+		packet.type = PACKET_TYPE::S2C_REMOVE_OBJECT;
+		packet.object_id = player_id;
 		visible_players_mutex.lock();
 		if (!visible_players.contains(player_id))
 		{
@@ -600,15 +600,9 @@ bool SESSION::proccess_packet(unsigned char* buff)
 	case PACKET_TYPE::C2S_MOVE:
 	{
 		C2S_Move* packet = reinterpret_cast<C2S_Move*>(buff);
-		int16_t dx = 0;
-		int16_t dy = 0;
-		switch (packet->dir)
-		{
-		case DIRECTION::UP:    dy = -1; break;
-		case DIRECTION::DOWN:  dy = 1;  break;
-		case DIRECTION::LEFT:  dx = -1; break;
-		case DIRECTION::RIGHT: dx = 1;  break;
-		}
+		int16_t dx = packet->x;
+		int16_t dy = packet->y;
+		
 
 		int16_t old_x = player_->x_;
 		int16_t old_y = player_->y_;
@@ -660,13 +654,13 @@ bool SESSION::proccess_packet(unsigned char* buff)
 			{
 				if (is_npc_id(id)) {
 					auto npc = npcs[id].load();
-					S2C_AddPlayer add_pkt;
+					S2C_AddObject add_pkt;
 					add_pkt.size = sizeof(add_pkt);
-					add_pkt.type = PACKET_TYPE::S2C_ADD_PLAYER;
-					add_pkt.playerId = id;
+					add_pkt.type = PACKET_TYPE::S2C_ADD_OBJECT;
+					add_pkt.object_id = id;
 					add_pkt.x = npc->x_;
 					add_pkt.y = npc->y_;
-					strcpy_s(add_pkt.username, npc->userName_);
+					strcpy_s(add_pkt.obj_name, npc->userName_);
 					do_send(add_pkt.size, reinterpret_cast<char*>(&add_pkt));
 
 					npc->wake_up();
@@ -698,10 +692,10 @@ bool SESSION::proccess_packet(unsigned char* buff)
 			if (!new_visible_players.contains(id))
 			{
 				if (is_npc_id(id)) {
-					S2C_RemovePlayer remove_pkt;
+					S2C_RemoveObject remove_pkt;
 					remove_pkt.size = sizeof(remove_pkt);
-					remove_pkt.type = PACKET_TYPE::S2C_REMOVE_PLAYER;
-					remove_pkt.playerId = id;
+					remove_pkt.type = PACKET_TYPE::S2C_REMOVE_OBJECT;
+					remove_pkt.object_id = id;
 					do_send(remove_pkt.size, reinterpret_cast<char*>(&remove_pkt));
 
 					visible_players_mutex.lock();
@@ -731,10 +725,10 @@ void SESSION::send_move_packet(int move_player_id, uint32_t timestamp)
 	if (is_npc_id(move_player_id)) {
 		auto npc = npcs[move_player_id].load();
 		if (!npc) return;
-		S2C_MovePlayer move_packet;
-		move_packet.size = sizeof(S2C_MovePlayer);
-		move_packet.type = PACKET_TYPE::S2C_MOVE_PLAYER;
-		move_packet.playerId = move_player_id;
+		S2C_MoveObject move_packet;
+		move_packet.size = sizeof(S2C_MoveObject);
+		move_packet.type = PACKET_TYPE::S2C_MOVE_OBJECT;
+		move_packet.object_id = move_player_id;
 		move_packet.x = npc->x_;
 		move_packet.y = npc->y_;
 		move_packet.move_time = timestamp;
@@ -745,10 +739,10 @@ void SESSION::send_move_packet(int move_player_id, uint32_t timestamp)
 	std::shared_ptr<SESSION> session = clients[move_player_id].load();
 	if (!session || !session->player_) return;
 
-	S2C_MovePlayer move_packet;
-	move_packet.size = sizeof(S2C_MovePlayer);
-	move_packet.type = PACKET_TYPE::S2C_MOVE_PLAYER;
-	move_packet.playerId = move_player_id;
+	S2C_MoveObject move_packet;
+	move_packet.size = sizeof(S2C_MoveObject);
+	move_packet.type = PACKET_TYPE::S2C_MOVE_OBJECT;
+	move_packet.object_id = move_player_id;
 	move_packet.x = session->player_->x_;
 	move_packet.y = session->player_->y_;
 	move_packet.move_time = timestamp;
@@ -759,11 +753,11 @@ void SESSION::send_add_player(int player_id)
 	std::shared_ptr<SESSION> session = clients[player_id].load();
 	if (!session || !session->player_) return;
 
-	S2C_AddPlayer add_packet;
-	add_packet.size = sizeof(S2C_AddPlayer);
-	add_packet.type = PACKET_TYPE::S2C_ADD_PLAYER;
-	add_packet.playerId = player_id;
-	strncpy_s(add_packet.username, session->player_->userName_, MAX_NAME_LEN);
+	S2C_AddObject add_packet;
+	add_packet.size = sizeof(S2C_AddObject);
+	add_packet.type = PACKET_TYPE::S2C_ADD_OBJECT;
+	add_packet.object_id = player_id;
+	strncpy_s(add_packet.obj_name, session->player_->userName_, MAX_NAME_LEN);
 	add_packet.x = session->player_->x_;
 	add_packet.y = session->player_->y_;
 
@@ -775,7 +769,7 @@ void SESSION::send_add_player(int player_id)
 	}
 	visible_players.insert(player_id);
 	visible_players_mutex.unlock();
-	do_send(sizeof(S2C_AddPlayer), reinterpret_cast<char*>(&add_packet));
+	do_send(sizeof(S2C_AddObject), reinterpret_cast<char*>(&add_packet));
 }
 void SESSION::send_already_spawn_players()
 {
@@ -787,13 +781,13 @@ void SESSION::send_already_spawn_players()
 			if (is_npc_id(id)) {
 				auto npc = npcs[id].load();
 				if (is_visible(npc->x_, npc->y_)) {
-					S2C_AddPlayer add_pkt;
+					S2C_AddObject add_pkt;
 					add_pkt.size = sizeof(add_pkt);
-					add_pkt.type = PACKET_TYPE::S2C_ADD_PLAYER;
-					add_pkt.playerId = id;
+					add_pkt.type = PACKET_TYPE::S2C_ADD_OBJECT;
+					add_pkt.object_id = id;
 					add_pkt.x = npc->x_;
 					add_pkt.y = npc->y_;
-					strcpy_s(add_pkt.username, npc->userName_);
+					strcpy_s(add_pkt.obj_name, npc->userName_);
 					do_send(add_pkt.size, reinterpret_cast<char*>(&add_pkt));
 
 					visible_players_mutex.lock();
@@ -880,7 +874,7 @@ void client_disconnect(int client_id)
 void npc_initialize()
 {
 
-	for (int i = 0; i < MAX_NPCS; ++i)
+	for (int i = 0; i < NUM_NPCS; ++i)
 	{
 		int npc_id = make_npc_id(npc_index++);
 		auto npc = std::make_shared<NPC>();
@@ -894,128 +888,7 @@ void npc_initialize()
 	}
 }
 
-void ai_thread()
-{
-	using namespace std::chrono;
-	while (true)
-	{
-		auto current_time = system_clock::now();
-		int elapsed_time = 1000;
-		for (auto& [npc_id, atomic_npc] : npcs)
-		{
-			auto npc = atomic_npc.load();
-			if (!npc) continue;
-			auto duration = duration_cast<milliseconds>(current_time - npc->last_move_timestamp_).count();
-			if (duration >= MOVE_COOL_TIME)
-			{
-				npc->heartbeat();
-				npc->last_move_timestamp_ = current_time;
-				if (duration > elapsed_time)
-				{
-					elapsed_time++;
-				}
-				else
-					elapsed_time--;
-
-			}
-		}
-		std::cout << "AI Thread: NPCs moved. Elapsed Time: " << elapsed_time << " ms\n";
-		auto end_time = system_clock::now();
-		auto elapsed = duration_cast<milliseconds>(end_time - current_time).count();
-
-		for (auto& [npc_id, atomic_npc] : npcs)
-		{
-			auto npc = atomic_npc.load();
-			if (!npc) continue;
-			auto nearby_players = sector.get_objects_nearby_sector(npc->x_, npc->y_);
-			for (auto& player_id : nearby_players)
-			{
-				if (is_npc_id(player_id)) continue; // NPC는 패킷을 받지 않음
-				std::shared_ptr<SESSION> session = clients[player_id].load();
-				if (!session || session->state_ != client_state::playing) continue;
-				if (session->is_visible(npc->x_, npc->y_))
-				{
-					S2C_MovePlayer move_packet;
-					move_packet.size = sizeof(move_packet);
-					move_packet.type = PACKET_TYPE::S2C_MOVE_PLAYER;
-					move_packet.playerId = npc_id;
-					move_packet.x = npc->x_;
-					move_packet.y = npc->y_;
-					session->do_send(sizeof(move_packet), reinterpret_cast<char*>(&move_packet));
-				}
-			}
-		}
-		if (elapsed < 5)
-		{
-			std::this_thread::sleep_for(milliseconds(10)); // AI 스레드의 CPU 사용량을 줄이기 위해 잠시 대기
-		}
-	}
-}
-
-void HeartBeat_thread()
-{
-	using namespace std::chrono;
-
-	while (true) {
-		auto start_time = system_clock::now();
-		for (auto& [id, atomic_npc] : npcs) {
-			auto npc = atomic_npc.load();
-			if (npc) {
-				npc->heartbeat();
-			}
-		}
-		auto end_time = system_clock::now();
-		auto elapsed = end_time - start_time;
-		if (elapsed < milliseconds(MOVE_COOL_TIME)) {
-			std::this_thread::sleep_for(milliseconds(MOVE_COOL_TIME) - elapsed);
-		}
-
-		std::cout << "Elapsed Time : "
-			<< duration_cast<milliseconds>(elapsed).count()
-			<< "ms.\n";
-	}
-}
-
 void timer_thread()
-{
-	using namespace std::chrono;
-	long long elasped_time = 1000;
-	auto last_send_time = system_clock::now();
-	while (true)
-	{
-		event_type ev;
-		if (timer_queue.try_pop(ev))
-		{
-			auto now = system_clock::now();
-			if (now >= ev.wakeup_time)
-			{
-				switch (ev.event_id)
-				{
-				case EVENT_MOVE:
-					{
-						auto npc = npcs[ev.obj_id].load();
-						if (npc) npc->do_random_move();
-						ev.wakeup_time = system_clock::now() + milliseconds(MOVE_COOL_TIME);
-						timer_queue.push(ev);
-					}
-					break;
-				default:
-					std::cout << "Unknown Event Type in Timer Thread!" << std::endl;
-					break;
-				}
-			}
-			else
-			{
-				timer_queue.push(ev); // 아직 실행 시간이 안된 이벤트는 다시 큐에 넣음
-				std::this_thread::sleep_for(milliseconds(1)); // CPU 사용량을 줄이기 위해 잠시 대기
-			}
-		}
-		std::this_thread::sleep_for(milliseconds(1)); // 이벤트가 없을 때 CPU 사용량을 줄이기 위해 잠시 대기
-	}
-
-}
-
-void timer_thread2()
 {
 	using namespace std::chrono;
 
@@ -1245,7 +1118,7 @@ int main()
 	AcceptEx(server_socket, accept_over.accept_socket, &accept_over.buff, 0,
 		sizeof(SOCKADDR_IN) + 16, sizeof(SOCKADDR_IN) + 16, NULL, &accept_over.over);
 
-	std::thread ai_thread_handle(timer_thread2);
+	std::thread ai_thread_handle(timer_thread);
 
 	std::vector<std::thread> worker_threads;
 	for (unsigned int i = 0; i < std::thread::hardware_concurrency(); ++i)

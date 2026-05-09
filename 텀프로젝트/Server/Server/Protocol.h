@@ -1,116 +1,38 @@
-﻿//#pragma once
-//
-//constexpr short PORT = 9001;
-//constexpr int WORLD_WIDTH = 400;
-//constexpr int WORLD_HEIGHT = 400;
-//constexpr int MAX_PLAYERS = 1000;
-//constexpr int MAX_NAME_LEN = 20;
-//
-//enum class packet_type : uint16_t
-//{
-//	C2S_LOGIN = 0,
-//	C2S_MOVE = 1,
-//
-//
-//	S2C_LOGIN_ACK = 12,
-//	S2C_AVATAR_INFO = 13,
-//	S2C_ADD_PLAYER = 14,
-//	S2C_PLAYER_MOVE = 15,
-//	S2C_REMOVE_PLAYER = 16,
-//
-//	S2C_ADD_NPC = 20,
-//	S2C_NPC_MOVE = 21,
-//	S2C_REMOVE_NPC = 22,
-//};
-//#pragma pack(push, 1)
-//struct packet_header
-//{
-//	unsigned char size;
-//	packet_type type;
-//};
-//
-////----------------------------------------------------------------------------
-//// 클라이언트 -> 서버 패킷
-//struct c2s_login : packet_header
-//{
-//	char userName[MAX_NAME_LEN];
-//};
-//struct c2s_move : packet_header
-//{
-//	struct vec2
-//	{
-//		int16_t x;
-//		int16_t y;
-//	} dir;
-//	uint32_t timestamp;
-//};
-//
-////-----------------------------------------------------------------------------
-//// 서버 -> 클라이언트 패킷
-//struct s2c_login_ack : packet_header
-//{
-//	bool success;
-//	char msg[50];
-//};
-//
-//struct s2c_avatar_info : packet_header
-//{
-//	int id; // 플레이어 아이디는 적어도 int32_t 이상이어야 합니다.
-//	int16_t x;
-//	int16_t y;
-//};
-//
-//struct s2c_add_player : packet_header
-//{
-//	int id;
-//	char userName[MAX_NAME_LEN];
-//	int16_t x;
-//	int16_t y;
-//};
-//struct s2c_remove_player : packet_header
-//{
-//	int id;
-//};
-//struct s2c_player_move : packet_header
-//{
-//	int id;
-//	int16_t x;
-//	int16_t y;
-//	uint32_t timestamp;
-//};
-//
-//struct s2c_add_npc : packet_header
-//{
-//	int id;
-//	char npcName[MAX_NAME_LEN];
-//	int16_t x;
-//	int16_t y;
-//};
-//struct s2c_remove_npc : packet_header
-//{
-//	int id;
-//};
-//struct s2c_npc_move : packet_header
-//{
-//	int id;
-//	int16_t x;
-//	int16_t y;
-//	uint32_t timestamp;
-//};
-//#pragma pack(pop)
-
-#pragma once
+﻿#pragma once
 
 constexpr short PORT = 3500;
 constexpr int WORLD_WIDTH = 2000;
 constexpr int WORLD_HEIGHT = 2000;
 constexpr int MAX_PLAYERS = 10000;
-constexpr int NPC_ID_START = MAX_PLAYERS;
-constexpr int MAX_NPCS = 20'0000;
+constexpr int NUM_NPCS = 200000;
+constexpr int NPC_ID_START = 1000000;
+constexpr int NPC_MOVE_INTERVAL = 1000; // in milliseconds
 constexpr int MAX_NAME_LEN = 20;
+constexpr int MAX_CHAT_MSG_LEN = 200;
 
-enum PACKET_TYPE { C2S_LOGIN, C2S_MOVE, S2C_LOGIN_RESULT, S2C_AVATAR_INFO, S2C_ADD_PLAYER, S2C_REMOVE_PLAYER, S2C_MOVE_PLAYER };
-enum DIRECTION { UP, DOWN, LEFT, RIGHT };
+enum PACKET_TYPE {
+	C2S_LOGIN,			// Client to Server: Login request
+						// 사용자 이름을 포함한 로그인 요청 패킷	
+	C2S_MOVE,			// Client to Server: Move request
+						// 이동 방향과 이동 시간을 포함한 이동 요청 패킷
+	C2S_CHAT,			// Client to Server: Chat message
+						// 채팅 메시지를 포함한 채팅 요청 패킷
+	C2S_ATTACK,			// Client to Server: Attack request
+						// 공격 요청 패킷 (4 방향 동시 공격)
+	C2S_TELEPORT,		// Client to Server: Teleport request
+						// 텔레포트 요청 패킷 (목적지 좌표 포함)
+						// STRESS TEST용으로 추가한 패킷입니다. 시작 마을에 몰리는 것을 방지.
+	C2S_LOGOUT,			// Client to Server: Logout request
+
+	S2C_LOGIN_RESULT,	//	Server to Client: Login result
+						// 로그인 결과 패킷 (성공 여부와 메시지 포함)
+	S2C_AVATAR_INFO,	//	Server to Client: Avatar information
+	S2C_ADD_OBJECT,		//	Server to Client: Add player or NPC		
+	S2C_REMOVE_OBJECT,	//	Server to Client: Remove player or NPC
+	S2C_MOVE_OBJECT,	//	Server to Client: Move player or NPC
+	S2C_CHAT_MESSAGE,	//	Server to Client: Chat message
+	S2C_STATUS_CHANGE,	//	Server to Client: Update player or NPC status (e.g., health, buffs)	
+};
 
 #pragma pack(push, 1) // Ensure no padding between struct members
 struct C2S_Login {
@@ -122,8 +44,32 @@ struct C2S_Login {
 struct C2S_Move {
 	unsigned char size;
 	PACKET_TYPE   type;
-	DIRECTION    dir;
+	short x;
+	short y;
 	int move_time; // in milliseconds
+};
+
+struct C2S_Chat {
+	unsigned char size;
+	PACKET_TYPE   type;
+	char message[MAX_CHAT_MSG_LEN];
+};
+
+struct C2S_Attack {
+	unsigned char size;
+	PACKET_TYPE   type;
+};
+
+struct C2S_Teleport {
+	unsigned char size;
+	PACKET_TYPE   type;
+	short x;
+	short y;
+};
+
+struct C2S_Logout {
+	unsigned char size;
+	PACKET_TYPE   type;
 };
 
 struct S2C_LoginResult {
@@ -137,31 +83,59 @@ struct S2C_AvatarInfo {
 	unsigned char size;
 	PACKET_TYPE   type;
 	int playerId;
+	int visualId; // for future use (different visual appearances)
 	short x;
 	short y;
+	int hp;
+	int max_hp;
+	unsigned long long exp;
+	unsigned char level;
 };
 
-struct S2C_AddPlayer {
+struct S2C_AddObject {
 	unsigned char size;
 	PACKET_TYPE   type;
-	int playerId;
-	char username[MAX_NAME_LEN];
+	int object_id;
+	int visual_id; // for future use (different visual appearances)
+	char obj_name[MAX_NAME_LEN];
 	short x;
 	short y;
+	int hp;
+	int max_hp;
+	unsigned long long exp;
+	unsigned char level;
 };
 
-struct S2C_RemovePlayer {
+struct S2C_RemoveObject {
 	unsigned char size;
 	PACKET_TYPE   type;
-	int playerId;
+	int object_id;
 };
 
-struct S2C_MovePlayer {
+struct S2C_MoveObject {
 	unsigned char size;
 	PACKET_TYPE   type;
-	int playerId;
-	short x;
+	int object_id;
+	short x; // 나는 방향으로 해석
 	short y;
 	int move_time; // in milliseconds
 };
+
+struct S2C_ChatMessage {
+	unsigned char size;
+	PACKET_TYPE   type;
+	int object_id;
+	char message[MAX_CHAT_MSG_LEN];
+};
+
+struct S2C_StatusChange {
+	unsigned char size;
+	PACKET_TYPE   type;
+	int object_id;
+	int hp;
+	int max_hp;
+	unsigned long long exp;
+	unsigned char level;
+};
+
 #pragma pack(pop) // Restore default packing

@@ -1,4 +1,4 @@
-#include "pch.h"
+﻿#include "pch.h"
 #include "NetworkManager.h"
 
 #include "common.h"
@@ -117,48 +117,48 @@ void NetworkManager::process_packet(char* ptr)
 		std::cout << "Avatar Info: ID=" << p->playerId << " at (" << p->x << ", " << p->y << ")\n";
 		break;
 	}
-	case S2C_ADD_PLAYER: {
-		S2C_AddPlayer* p = reinterpret_cast<S2C_AddPlayer*>(ptr);
-		if (is_npc_id(p->playerId))
+	case S2C_ADD_OBJECT: {
+		S2C_AddObject* p = reinterpret_cast<S2C_AddObject*>(ptr);
+		if (is_npc_id(p->object_id))
 		{
-			gm->npcs().emplace(p->playerId, Object{ p->playerId, p->username, p->x, p->y });
+			gm->npcs().emplace(p->object_id, Object{ p->object_id, p->obj_name, p->x, p->y });
 		}
-		else if (p->playerId == gm->my_id()) break;
+		else if (p->object_id == gm->my_id()) break;
 		else {
-			gm->players().emplace(p->playerId, Object{ p->playerId, p->username, p->x, p->y });
-			std::cout << "Add Player: ID=" << p->playerId << ", Name=" << p->username << " at (" << p->x << ", " << p->y << ")\n";
+			gm->players().emplace(p->object_id, Object{ p->object_id, p->obj_name, p->x, p->y });
+			std::cout << "Add Player: ID=" << p->object_id << ", Name=" << p->obj_name << " at (" << p->x << ", " << p->y << ")\n";
 		}
 		break;
 	}
-	case S2C_MOVE_PLAYER: {
-		S2C_MovePlayer* p = reinterpret_cast<S2C_MovePlayer*>(ptr);
-		if (is_npc_id(p->playerId))
+	case S2C_MOVE_OBJECT: {
+		S2C_MoveObject* p = reinterpret_cast<S2C_MoveObject*>(ptr);
+		if (is_npc_id(p->object_id))
 		{
-			if (gm->npcs().contains(p->playerId)) {
-				gm->npcs()[p->playerId].x = p->x;
-				gm->npcs()[p->playerId].y = p->y;
+			if (gm->npcs().contains(p->object_id)) {
+				gm->npcs()[p->object_id].x = p->x;
+				gm->npcs()[p->object_id].y = p->y;
 			}
 		}
-		else if (gm->players().contains(p->playerId)) {
-			gm->players()[p->playerId].x = p->x;
-			gm->players()[p->playerId].y = p->y;
+		else if (gm->players().contains(p->object_id)) {
+			gm->players()[p->object_id].x = p->x;
+			gm->players()[p->object_id].y = p->y;
 		}
 		break;
 	}
-	case S2C_REMOVE_PLAYER: {
-		S2C_RemovePlayer* p = reinterpret_cast<S2C_RemovePlayer*>(ptr);
-		if (is_npc_id(p->playerId))
+	case S2C_REMOVE_OBJECT: {
+		S2C_RemoveObject* p = reinterpret_cast<S2C_RemoveObject*>(ptr);
+		if (is_npc_id(p->object_id))
 		{
-			if (gm->npcs().contains(p->playerId)) {
-				gm->npcs().erase(p->playerId);
-				std::cout << "Remove NPC: ID=" << p->playerId << "\n";
+			if (gm->npcs().contains(p->object_id)) {
+				gm->npcs().erase(p->object_id);
+				std::cout << "Remove NPC: ID=" << p->object_id << "\n";
 			}
 		}
-		else if (!gm->players().contains(p->playerId)) break;
+		else if (!gm->players().contains(p->object_id)) break;
 		else
 		{
-			gm->players().erase(p->playerId);
-			std::cout << "Remove Player: ID=" << p->playerId << "\n";
+			gm->players().erase(p->object_id);
+			std::cout << "Remove Player: ID=" << p->object_id << "\n";
 		}
 		break;
 	}

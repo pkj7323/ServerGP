@@ -11,6 +11,9 @@ class GameManager : public Singleton<GameManager>
 public:
 	GameManager() : _isRunning(true), _myId(-1) {}
 
+	void Init() override;
+
+
 	std::unordered_map<int, Object>& players() { return _players; }
 	std::unordered_map<int, Object>& npcs() { return _npcs; }
 
@@ -23,10 +26,28 @@ public:
 	void set_running(bool running) { _isRunning = running; }
 	bool is_running() const { return _isRunning; }
 
+	// 맵 데이터 로드
+	void load_map();
+
+	// 충돌 체크
+	bool can_move(int x, int y) {
+		if (x < 0 || x >= WORLD_WIDTH || y < 0 || y >= WORLD_HEIGHT) return false;
+		return _collisionMap[y * WORLD_WIDTH + x] == 0;
+	}
+
+	// 렌더링용 타일 가져오기
+	uint8_t get_visual_tile(int x, int y) {
+		if (x < 0 || x >= WORLD_WIDTH || y < 0 || y >= WORLD_HEIGHT) return 0;
+		return _visualMap[y * WORLD_WIDTH + x];
+	}
+
 private:
 	std::unordered_map<int, Object> _players;
 	std::unordered_map<int, Object> _npcs;
 	int _myId;
 	std::string _username;
 	bool _isRunning;
+
+	std::array<uint8_t, WORLD_WIDTH* WORLD_HEIGHT> _visualMap{};
+	std::array<uint8_t, WORLD_WIDTH* WORLD_HEIGHT> _collisionMap{};
 };
