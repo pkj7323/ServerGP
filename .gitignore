@@ -546,3 +546,6 @@ fabric.properties
 
 # idea folder, uncomment if you don't need it
 # .idea
+/텀프로젝트/.idea/workspace.xml
+/텀프로젝트/Map generator/Map generator/map_collision.bin
+/텀프로젝트/Map generator/Map generator/map_visual.bin
