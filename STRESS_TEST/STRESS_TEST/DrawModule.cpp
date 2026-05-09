@@ -500,5 +500,13 @@ int WINAPI WinMain(HINSTANCE	hInstance,			// Instance
 
 int main()
 {
+	printf("Enter server IP (default 127.0.0.1): ");
+	char input_ip[16];
+	fgets(input_ip, sizeof(input_ip), stdin);
+	if (input_ip[0] != '\n' && input_ip[0] != '\0') {
+		input_ip[strcspn(input_ip, "\n")] = 0;
+		strcpy_s(g_server_ip, input_ip);
+	}
+
 	WinMain(0, 0, 0, 0);
 }

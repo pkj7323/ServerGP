@@ -11,6 +11,7 @@
 #include <vector>
 #include <ctime>
 #include <concurrent_priority_queue.h>
+#include <queue>
 
 #include "Protocol.h"
 #include <tbb/concurrent_unordered_map.h>
@@ -1017,21 +1018,35 @@ void timer_thread()
 void timer_thread2()
 {
 	using namespace std::chrono;
+
+	// 실행 시간(wakeup_time)이 가장 빠른 이벤트가 먼저 오도록 정렬하는 비교 함수
+	std::priority_queue<event_type, std::vector<event_type>> local_queue;
+
 	while (true)
 	{
 		event_type ev;
-		if (timer_queue.try_pop(ev))
+		// 글로벌 큐에 새로 들어온 모든 이벤트를 로컬 큐로 옮김
+		while (timer_queue.try_pop(ev))
+		{
+			local_queue.push(ev);
+		}
+
+		if (!local_queue.empty())
 		{
 			auto now = system_clock::now();
-			if (now >= ev.wakeup_time)
+			auto top_ev = local_queue.top();
+
+			// 가장 빠른 타이머의 실행 시간이 되었는지 확인
+			if (now >= top_ev.wakeup_time)
 			{
-				switch (ev.event_id)
+				local_queue.pop();
+				switch (top_ev.event_id)
 				{
 				case EVENT_MOVE:
 					{
 						EXP_OVER* move_over = new EXP_OVER;
 						move_over->type = io_type::npc_move;
-						PostQueuedCompletionStatus(h_iocp, -1, ev.obj_id, &move_over->over);
+						PostQueuedCompletionStatus(h_iocp, -1, top_ev.obj_id, &move_over->over);
 					}
 					break;
 				default:
@@ -1041,11 +1056,15 @@ void timer_thread2()
 			}
 			else
 			{
-				timer_queue.push(ev); // 아직 실행 시간이 안된 이벤트는 다시 큐에 넣음
-				std::this_thread::sleep_for(milliseconds(1)); // CPU 사용량을 줄이기 위해 잠시 대기
+				// 아직 실행 시간이 되지 않았다면 잠깐 대기
+				std::this_thread::sleep_for(milliseconds(1)); 
 			}
 		}
-		
+		else
+		{
+			// 처리할 이벤트가 없으면 대기
+			std::this_thread::sleep_for(milliseconds(1));
+		}
 	}
 }
 

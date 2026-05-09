@@ -358,6 +358,11 @@ int WINAPI WinMain(HINSTANCE hI, HINSTANCE hP, LPSTR lp, int nS) {
 	freopen_s(&f, "CONOUT$", "w", stdout);
 	freopen_s(&f, "CONOUT$", "w", stderr);
 
+	std::string server_ip;
+	std::cout << "Enter server IP (default 127.0.0.1): ";
+	std::getline(std::cin, server_ip);
+	if (server_ip.empty()) server_ip = "127.0.0.1";
+
 	std::cout << "Enter username: ";
 	std::getline(std::cin, g_username);
 	if (g_username.length() >= MAX_NAME_LEN) g_username = g_username.substr(0, MAX_NAME_LEN - 1);
@@ -374,7 +379,7 @@ int WINAPI WinMain(HINSTANCE hI, HINSTANCE hP, LPSTR lp, int nS) {
 	SOCKADDR_IN addr{};
 	addr.sin_family = AF_INET;
 	addr.sin_port = htons(PORT);
-	inet_pton(AF_INET, "127.0.0.1", &addr.sin_addr);
+	inet_pton(AF_INET, server_ip.c_str(), &addr.sin_addr);
 
 	connect(g_socket, (sockaddr*)&addr, sizeof(addr));
 

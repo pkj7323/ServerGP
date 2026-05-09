@@ -30,6 +30,7 @@ const static int MAX_BUFF_SIZE = 255;
 #include "../../Server/Server/Protocol.h"
 
 HANDLE g_hiocp;
+char g_server_ip[16] = "127.0.0.1";
 
 enum OPTYPE { OP_SEND, OP_RECV, OP_DO_MOVE };
 
@@ -63,14 +64,14 @@ atomic_int num_connections;
 atomic_int client_to_close;
 atomic_int active_clients;
 
-int			global_delay;				// ms´ÜÀ§, 1000ÀÌ ³ÑÀ¸¸é Å¬¶óÀÌ¾ðÆ® Áõ°¡ Á¾·á
+int			global_delay;				// msï¿½ï¿½ï¿½ï¿½, 1000ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ Å¬ï¿½ï¿½ï¿½Ì¾ï¿½Æ® ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½
 
 vector <thread*> worker_threads;
 thread test_thread;
 
 float point_cloud[MAX_TEST * 2];
 
-// ³ªÁß¿¡ NPC±îÁö Ãß°¡ È®Àå ¿ë
+// ï¿½ï¿½ï¿½ß¿ï¿½ NPCï¿½ï¿½ï¿½ï¿½ ï¿½ß°ï¿½ È®ï¿½ï¿½ ï¿½ï¿½
 struct ALIEN {
 	int id;
 	int x, y;
@@ -87,7 +88,7 @@ void error_display(const char* msg, int err_no)
 		MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
 		(LPTSTR)&lpMsgBuf, 0, NULL);
 	std::cout << msg;
-	std::wcout << L"¿¡·¯" << lpMsgBuf << std::endl;
+	std::wcout << L"ï¿½ï¿½ï¿½ï¿½" << lpMsgBuf << std::endl;
 
 	MessageBox(hWnd, lpMsgBuf, L"ERROR", 0);
 	LocalFree(lpMsgBuf);
@@ -221,7 +222,7 @@ void Worker_Thread()
 			while (io_size > 0) {
 				if (0 == psize) psize = buf[0];
 				if (io_size + pr_size >= psize) {
-					// Áö±Ý ÆÐÅ¶ ¿Ï¼º °¡´É
+					// ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½Å¶ ï¿½Ï¼ï¿½ ï¿½ï¿½ï¿½ï¿½
 					unsigned char packet[MAX_PACKET_SIZE];
 					memcpy(packet, g_clients[ci].packet_buf, pr_size);
 					memcpy(packet + pr_size, buf, psize - pr_size);
@@ -313,7 +314,7 @@ void Adjust_Number_Of_Client()
 	ZeroMemory(&ServerAddr, sizeof(SOCKADDR_IN));
 	ServerAddr.sin_family = AF_INET;
 	ServerAddr.sin_port = htons(PORT);
-	ServerAddr.sin_addr.s_addr = inet_addr("127.0.0.1");
+	ServerAddr.sin_addr.s_addr = inet_addr(g_server_ip);
 
 
 	int Result = WSAConnect(g_clients[num_connections].client_socket, (sockaddr*)&ServerAddr, sizeof(ServerAddr), NULL, NULL, NULL, NULL);
