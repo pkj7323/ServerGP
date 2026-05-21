@@ -1,109 +1,261 @@
-#include <algorithm>
+Ôªø#include <algorithm>
 #include <iostream>
 #include <vector>
 #include <fstream>
+#include <cmath>
+#include <random>
 #include "FastNoiseLite.h" // https://github.com/Auburn/FastNoiseLite
-
-
 #include "Protocol.h"
 
 
-// πŸ¿Ãø» ID (10∞≥)
+// ===== Î∞îÏù¥Ïò¥ ID (10Ï¢Ö) =====
 enum BiomeType {
-    BIOME_PLAINS = 0,
-    BIOME_DESERT = 1, 
-	BIOME_SNOW = 2, 
-	BIOME_FOREST = 3, 
-	BIOME_JUNGLE = 4,
-    BIOME_SWAMP = 5, 
-	BIOME_TAIGA = 6, 
-	BIOME_SAVANNA = 7, 
-	BIOME_BADLANDS = 8, 
-	BIOME_OCEAN = 9
+    BIOME_PLAINS  = 0,
+    BIOME_DESERT  = 1,
+    BIOME_SNOW    = 2,
+    BIOME_FOREST  = 3,
+    BIOME_JUNGLE  = 4,
+    BIOME_SWAMP   = 5,
+    BIOME_TAIGA   = 6,
+    BIOME_SAVANNA = 7,
+    BIOME_BADLANDS = 8,
+    BIOME_OCEAN   = 9
 };
 
-// Ω√∞¢¿˚ ≈∏¿œ ID (∑ª¥ı∏µøÎ)
+// ===== ÌÉÄÏùº ÏãúÍ∞Å ID =====
 enum TileType : uint8_t {
-    TILE_WATER = 0,
-	TILE_GRASS = 1, 
-	TILE_DIRT = 2,
-	TILE_STONE = 3,
-	TILE_SAND = 4,
+    TILE_WATER     = 0,
+    TILE_GRASS     = 1,
+    TILE_DIRT      = 2,
+    TILE_STONE     = 3,
+    TILE_SAND      = 4,
     TILE_SANDSTONE = 5,
-	TILE_SNOW = 6,
-	TILE_ICE = 7, 
-	TILE_MUD = 8,
-	TILE_DEEPSLATE = 9
+    TILE_SNOW      = 6,
+    TILE_ICE       = 7,
+    TILE_MUD       = 8,
+    TILE_DEEPSLATE = 9
 };
 
-// √Êµπ√º µ•¿Ã≈Õ (Bitmask øÎµµ)
+// ===== NPC Ïä§Ìè∞ ÌÉÄÏûÖ (map_spawn.binÏóê Ï†ÄÏû•ÎêòÎäî Í∞í) =====
+enum NpcType : uint8_t {
+    NPC_NONE       = 0,  // Ïä§Ìè∞ ÏóÜÏùå
+    NPC_ZOMBIE     = 1,
+    NPC_SKELETON   = 2,
+    NPC_CREEPER    = 3,
+    NPC_ENDERMAN   = 4,
+    NPC_IRON_GOLEM = 5,
+};
+
+// ===== Ï∂©Îèå ÌîåÎûòÍ∑∏ =====
 constexpr uint8_t COLLISION_PASSABLE = 0;
-constexpr uint8_t COLLISION_BLOCKED = 1;
+constexpr uint8_t COLLISION_BLOCKED  = 1;
+
+// ===== Îßµ Ï§ëÏã¨ Î∞è ÎßàÏùÑ ÌÅ¨Í∏∞ =====
+constexpr int CENTER_X   = WORLD_WIDTH  / 2;  // 1000
+constexpr int CENTER_Y   = WORLD_HEIGHT / 2;  // 1000
+constexpr int TOWN_HALF  = 15;                // ÎßàÏùÑ: (CENTER+-15) -> 31x31
+
+// ===== Ïä§Ìè∞ Ï°¥ Î∞òÍ≤Ω =====
+constexpr float GOLEM_R_MIN    = 50.f;
+constexpr float GOLEM_R_MAX    = 150.f;
+constexpr float ZOMBIE_R_MIN   = 150.f;
+constexpr float ZOMBIE_R_MAX   = 400.f;
+constexpr float CREEPER_R_MIN  = 400.f;
+constexpr float CREEPER_R_MAX  = 700.f;
+constexpr float ENDERMAN_R_MIN = 700.f;
+
+// ===== Î™©Ìëú NPC ÎßàÎ¶¨ Ïàò (Ìï©Í≥Ñ = Ï†ïÌôïÌûà 200,000) =====
+constexpr int COUNT_IRON_GOLEM = 5000;
+constexpr int COUNT_ZOMBIE     = 40000;
+constexpr int COUNT_SKELETON   = 25000;
+constexpr int COUNT_CREEPER    = 70000;
+constexpr int COUNT_ENDERMAN   = 60000;
+constexpr int COUNT_TOTAL      = COUNT_IRON_GOLEM + COUNT_ZOMBIE + COUNT_SKELETON
+                               + COUNT_CREEPER + COUNT_ENDERMAN; // = 200,000
 
 int main() {
-    std::cout << "Generating Map Data..." << std::endl;
+    static_assert(COUNT_TOTAL == 200000, "NPC Ìï©Í≥ÑÍ∞Ä 200,000Ïù¥ ÏïÑÎãôÎãàÎã§!");
 
-    // 1. πŸ¿Ãø» ª˝º∫¿ª ¿ß«— Cellular (Voronoi) ≥Î¿Ã¡Ó ºº∆√
+    std::cout << "=== Map Generator ===" << std::endl;
+    std::cout << "World: " << WORLD_WIDTH << " x " << WORLD_HEIGHT << std::endl;
+    std::cout << "Target NPCs: " << COUNT_TOTAL << std::endl;
+
+    // -- 1. ÎÖ∏Ïù¥Ï¶à ÏÑ§Ï†ï ---------------------------------------------------
     FastNoiseLite biomeNoise;
     biomeNoise.SetNoiseType(FastNoiseLite::NoiseType_Cellular);
-    biomeNoise.SetFrequency(0.005f); // ∞™¿Ã ¿€¿ªºˆ∑œ πŸ¿Ãø» ±∏ø™¿Ã ≥–æÓ¡¸
+    biomeNoise.SetFrequency(0.005f);
     biomeNoise.SetCellularReturnType(FastNoiseLite::CellularReturnType_CellValue);
 
-    // 2. ¡ˆ«¸ µ≈◊¿œ(π∞, ∂•, ªÍ)¿ª ¿ß«— Perlin ≥Î¿Ã¡Ó ºº∆√
     FastNoiseLite terrainNoise;
     terrainNoise.SetNoiseType(FastNoiseLite::NoiseType_Perlin);
     terrainNoise.SetFrequency(0.01f);
 
-    // 3. µ•¿Ã≈Õ ƒ¡≈◊¿Ã≥  «“¥Á (2000x2000 = 4,000,000 bytes = æ‡ 3.8MB)
-    std::vector<uint8_t> visualData(WORLD_WIDTH * WORLD_HEIGHT);
-    std::vector<uint8_t> collisionData(WORLD_WIDTH * WORLD_HEIGHT);
+    // -- 2. Îç∞Ïù¥ÌÑ∞ Î≤ÑÌçº Ï¥àÍ∏∞Ìôî --------------------------------------------
+    const int TOTAL_CELLS = WORLD_WIDTH * WORLD_HEIGHT;
+    std::vector<uint8_t> visualData   (TOTAL_CELLS, TILE_GRASS);
+    std::vector<uint8_t> collisionData(TOTAL_CELLS, COLLISION_PASSABLE);
+    std::vector<uint8_t> spawnData    (TOTAL_CELLS, NPC_NONE);
+
+    // -- 3. Ï°¥Î≥Ñ ÌõÑÎ≥¥ ÏÖÄ Ïù∏Îç±Ïä§ ÏàòÏßë (Pass 1) -----------------------------
+    std::vector<int> golem_zone;
+    std::vector<int> zombie_skeleton_zone;
+    std::vector<int> creeper_zone;
+    std::vector<int> enderman_zone;
+
+    golem_zone.reserve(80000);
+    zombie_skeleton_zone.reserve(500000);
+    creeper_zone.reserve(1100000);
+    enderman_zone.reserve(2500000);
+
+    std::cout << "Generating terrain..." << std::endl;
 
     for (int y = 0; y < WORLD_HEIGHT; y++) {
         for (int x = 0; x < WORLD_WIDTH; x++) {
-            int index = y * WORLD_WIDTH + x;
+            const int index = y * WORLD_WIDTH + x;
 
-            // -1.0 ~ 1.0 ªÁ¿Ã¿« ≥Î¿Ã¡Ó ∞™ √ﬂ√‚
             float bNoise = biomeNoise.GetNoise((float)x, (float)y);
             float tNoise = terrainNoise.GetNoise((float)x, (float)y);
 
-            // ≥Î¿Ã¡Ó ∞™¿ª 0 ~ 9 ªÁ¿Ã¿« πŸ¿Ãø» ID∑Œ ∏≈«Œ
             int biome = static_cast<int>((bNoise + 1.0f) * 0.5f * 10.0f);
-			biome = std::min(biome, 9); // Clamp
+            biome = std::min(biome, 9);
 
-            uint8_t visualID = TILE_GRASS;
+            uint8_t visualID      = TILE_GRASS;
             uint8_t collisionFlag = COLLISION_PASSABLE;
 
-            // πŸ¿Ãø»∞˙ ¡ˆ«¸ ≥Ù≥∑¿Ãø° µ˚∏• ≈∏¿œ 1:1 ¥Î¿¿ π◊ √Êµπ ºº∆√
             if (biome == BIOME_DESERT) {
-                if (tNoise < -0.2f) { visualID = TILE_WATER; collisionFlag = COLLISION_BLOCKED; } // ø¿æ∆Ω√Ω∫
-                else if (tNoise > 0.5f) { visualID = TILE_SANDSTONE; collisionFlag = COLLISION_BLOCKED; } // ªÁæœ ¿˝∫Æ
-                else { visualID = TILE_SAND; collisionFlag = COLLISION_PASSABLE; }
+                if      (tNoise < -0.2f) { visualID = TILE_WATER;     collisionFlag = COLLISION_BLOCKED; }
+                else if (tNoise >  0.5f) { visualID = TILE_SANDSTONE; collisionFlag = COLLISION_BLOCKED; }
+                else                     { visualID = TILE_SAND; }
             }
             else if (biome == BIOME_SNOW) {
-                if (tNoise < -0.2f) { visualID = TILE_ICE; collisionFlag = COLLISION_PASSABLE; } // æÛæÓ∫Ÿ¿∫ ∞≠
-                else if (tNoise > 0.6f) { visualID = TILE_STONE; collisionFlag = COLLISION_BLOCKED; } // µπªÍ
-                else { visualID = TILE_SNOW; collisionFlag = COLLISION_PASSABLE; }
+                if      (tNoise < -0.2f) { visualID = TILE_ICE; }
+                else if (tNoise >  0.6f) { visualID = TILE_STONE; collisionFlag = COLLISION_BLOCKED; }
+                else                     { visualID = TILE_SNOW; }
             }
-            else { // ±‚∫ª ∆Úø¯ π◊ ±‚≈∏
-                if (tNoise < -0.3f) { visualID = TILE_WATER; collisionFlag = COLLISION_PASSABLE; } // »£ºˆ/∞≠
-                else if (tNoise > 0.5f) { visualID = TILE_STONE; collisionFlag = COLLISION_BLOCKED; } // ªÍ∏∆
-                else { visualID = TILE_GRASS; collisionFlag = COLLISION_PASSABLE; }
+            else {
+                if      (tNoise < -0.3f) { visualID = TILE_WATER; }
+                else if (tNoise >  0.5f) { visualID = TILE_STONE; collisionFlag = COLLISION_BLOCKED; }
+                else                     { visualID = TILE_GRASS; }
             }
 
-            visualData[index] = visualID;
+            visualData   [index] = visualID;
             collisionData[index] = collisionFlag;
+
+            // ÎßàÏùÑ Î∞è ÎßâÌûå ÏÖÄÏùÄ Ïä§Ìè∞ ÌõÑÎ≥¥ Ï†úÏô∏
+            const float dx   = (float)(x - CENTER_X);
+            const float dy   = (float)(y - CENTER_Y);
+            const float dist = std::sqrtf(dx * dx + dy * dy);
+
+            if (dist < (float)TOWN_HALF)           continue;
+            if (collisionFlag == COLLISION_BLOCKED) continue;
+
+            if      (dist >= GOLEM_R_MIN   && dist < GOLEM_R_MAX)  golem_zone.push_back(index);
+            else if (dist >= ZOMBIE_R_MIN  && dist < ZOMBIE_R_MAX)  zombie_skeleton_zone.push_back(index);
+            else if (dist >= CREEPER_R_MIN && dist < CREEPER_R_MAX) creeper_zone.push_back(index);
+            else if (dist >= ENDERMAN_R_MIN)                         enderman_zone.push_back(index);
         }
     }
 
-    // 4. πŸ¿Ã≥ ∏Æ ∆ƒ¿œ∑Œ ¿˙¿Â (º≠πˆ ∑Œµ˘ º”µµ √÷¿˚»≠)
-    std::ofstream visualOut("map_visual.bin", std::ios::binary);
-    visualOut.write(reinterpret_cast<const char*>(visualData.data()), visualData.size());
-    visualOut.close();
+    std::cout << "Candidate cells:"
+              << " Golem="    << golem_zone.size()
+              << " Zombie/Skeleton=" << zombie_skeleton_zone.size()
+              << " Creeper=" << creeper_zone.size()
+              << " Enderman=" << enderman_zone.size() << std::endl;
 
-    std::ofstream collisionOut("map_collision.bin", std::ios::binary);
-    collisionOut.write(reinterpret_cast<const char*>(collisionData.data()), collisionData.size());
-    collisionOut.close();
+    // -- 4. ÎßàÏùÑ 30x30 Í∞ïÏ†ú ÏïàÏ†Ñ Íµ¨Ïó≠ (Pass 2) ---------------------------
+    for (int y = CENTER_Y - TOWN_HALF; y <= CENTER_Y + TOWN_HALF; y++) 
+    {
+        for (int x = CENTER_X - TOWN_HALF; x <= CENTER_X + TOWN_HALF; x++) 
+        {
+            const int idx = y * WORLD_WIDTH + x;
+            visualData   [idx] = TILE_GRASS;
+            collisionData[idx] = COLLISION_PASSABLE;
+            spawnData    [idx] = NPC_NONE;
+        }
+    }
 
-    std::cout << "Map generated successfully! (map_visual.bin, map_collision.bin)" << std::endl;
+    // -- 5. Shuffle -> Ï†ïÌôïÌûà NÍ∞ú Î∞∞Ïπò (Pass 3) --------------------------
+    std::mt19937 rng(42); // Í≥†Ï†ï ÏãúÎìú: Ìï≠ÏÉÅ ÎèôÏùºÌïú Îßµ Ïû¨ÌòÑ
+
+    auto place_npcs = [&](std::vector<int>& candidates, NpcType type, int count,
+                          const char* type_name) {
+        if ((int)candidates.size() < count) {
+            std::cerr << "[WARNING] " << type_name
+                      << ": ÌõÑÎ≥¥ ÏÖÄ Î∂ÄÏ°±! ÌïÑÏöî=" << count
+                      << " Í∞ÄÏö©=" << candidates.size()
+                      << " -> Í∞ÄÏö© ÏµúÎåÄÏπòÎ°ú Î∞∞Ïπò" << std::endl;
+            count = (int)candidates.size();
+        }
+        std::shuffle(candidates.begin(), candidates.end(), rng);
+        for (int i = 0; i < count; i++) {
+            spawnData[candidates[i]] = type;
+        }
+        std::cout << "  Placed " << count << " " << type_name << std::endl;
+    };
+
+    std::cout << "Placing NPCs..." << std::endl;
+
+    // Í≥®Î†ò
+    place_npcs(golem_zone, NPC_IRON_GOLEM, COUNT_IRON_GOLEM, "Iron Golem");
+
+    // Ï¢ÄÎπÑ + Ïä§ÏºàÎ†àÌÜ§: Í∞ôÏùÄ Ï°¥ Í≥µÏú† -> shuffle ÌõÑ Ïïû/Îí§ Î∂ÑÎ¶¨
+    {
+        const int need_total = COUNT_ZOMBIE + COUNT_SKELETON;
+        if ((int)zombie_skeleton_zone.size() < need_total) {
+            std::cerr << "[WARNING] Zombie/Skeleton Ï°¥ ÌõÑÎ≥¥ ÏÖÄ Î∂ÄÏ°±! "
+                      << "ÌïÑÏöî=" << need_total
+                      << " Í∞ÄÏö©=" << zombie_skeleton_zone.size() << std::endl;
+        }
+        std::shuffle(zombie_skeleton_zone.begin(), zombie_skeleton_zone.end(), rng);
+        int zombie_placed   = 0;
+        int skeleton_placed = 0;
+        for (int i = 0; i < (int)zombie_skeleton_zone.size()
+                     && (zombie_placed + skeleton_placed) < need_total; i++) {
+            if (zombie_placed < COUNT_ZOMBIE) {
+                spawnData[zombie_skeleton_zone[i]] = NPC_ZOMBIE;
+                zombie_placed++;
+            } else if (skeleton_placed < COUNT_SKELETON) {
+                spawnData[zombie_skeleton_zone[i]] = NPC_SKELETON;
+                skeleton_placed++;
+            }
+        }
+        std::cout << "  Placed " << zombie_placed   << " Zombie" << std::endl;
+        std::cout << "  Placed " << skeleton_placed << " Skeleton" << std::endl;
+    }
+
+    // ÌÅ¨Î¶¨Ìçº
+    place_npcs(creeper_zone,  NPC_CREEPER,  COUNT_CREEPER,  "Creeper");
+
+    // ÏóîÎçîÎß®
+    place_npcs(enderman_zone, NPC_ENDERMAN, COUNT_ENDERMAN, "Enderman");
+
+    // -- 6. Î∞∞Ïπò Í≤ÄÏ¶ù -----------------------------------------------------
+    int total_placed = 0;
+    for (auto v : spawnData) if (v != NPC_NONE) total_placed++;
+    std::cout << "Total NPCs placed: " << total_placed
+              << " / " << COUNT_TOTAL
+              << (total_placed == COUNT_TOTAL ? " [OK]" : " [MISMATCH!]")
+              << std::endl;
+
+    // -- 7. Î∞îÏù¥ÎÑàÎ¶¨ ÌååÏùº Ï∂úÎ†• --------------------------------------------
+    std::cout << "Writing binary files..." << std::endl;
+    {
+        std::ofstream f("map_visual.bin", std::ios::binary);
+        f.write(reinterpret_cast<const char*>(visualData.data()), visualData.size());
+    }
+    {
+        std::ofstream f("map_collision.bin", std::ios::binary);
+        f.write(reinterpret_cast<const char*>(collisionData.data()), collisionData.size());
+    }
+    {
+        std::ofstream f("map_spawn.bin", std::ios::binary);
+        f.write(reinterpret_cast<const char*>(spawnData.data()), spawnData.size());
+    }
+
+    std::cout << "=== Done! ===" << std::endl;
+    std::cout << "  map_visual.bin    (~" << TOTAL_CELLS / 1024 / 1024 << " MB)" << std::endl;
+    std::cout << "  map_collision.bin (~" << TOTAL_CELLS / 1024 / 1024 << " MB)" << std::endl;
+    std::cout << "  map_spawn.bin     (~" << TOTAL_CELLS / 1024 / 1024 << " MB)" << std::endl;
+
     return 0;
 }

@@ -14,6 +14,7 @@
 #include <queue>
 
 #include "Protocol.h"
+#include "npc_loader.h"
 #include <tbb/concurrent_unordered_map.h>
 #include <unordered_set>
 #include <valarray>
@@ -41,6 +42,14 @@
 //      단점 : 포인터가 사용되고, reinterpret_cast가 필요하다. (별로 단점이 아니다).
 
 class SESSION;
+enum NpcType : uint8_t {
+	NPC_NONE = 0, // 빈 값
+	NPC_ZOMBIE = 1,
+	NPC_SKELETON = 2,
+	NPC_CREEPER = 3,
+	NPC_ENDERMAN = 4,
+	NPC_IRON_GOLEM = 5,
+};
 
 void error_display(const std::wstring& msg, int err_no)
 {
@@ -75,7 +84,7 @@ enum class io_type
 	recv,
 	accept,
 	npc_move,
-	count, 
+	count,
 };
 
 class EXP_OVER {
@@ -446,9 +455,18 @@ tbb::concurrent_unordered_map<int, std::atomic<std::shared_ptr<SESSION>>> client
 class NPC : public BaseObject {
 public:
 	std::atomic<bool> is_active{ false };
+
+	// [SpawnMap] 스폰 데이터에서 로드되는 NPC 고유 정보
+	NpcType            _npcType  = NPC_NONE;
+	int                _visualId = 0;
+	int                _hp       = 0;
+	int                _maxHp    = 0;
+	unsigned char      _level    = 1;
+	unsigned long long _exp      = 0;
+	int                _attack   = 0;
 public:
 	NPC() : BaseObject(), last_move_timestamp_(std::chrono::system_clock::now()) {}
-	std::chrono::time_point<std::chrono::system_clock> last_move_timestamp_; // NPC의 마지막 이동 시간 기록
+	std::chrono::time_point<std::chrono::system_clock> last_move_timestamp_; // NPC�� ������ �̵� �ð� ���
 	void heartbeat()
 	{
 		do_random_move();
@@ -485,7 +503,7 @@ public:
 		case 3:if (y_ > 0) y_--; break;
 		}
 
-		
+
 		sector.move_object(id_, old_x, old_y, x_, y_);
 		std::unordered_set<int> new_vl;
 		for (auto id : sector.get_objects_nearby_sector(x_, y_))
@@ -602,7 +620,7 @@ bool SESSION::proccess_packet(unsigned char* buff)
 		C2S_Move* packet = reinterpret_cast<C2S_Move*>(buff);
 		int16_t dx = packet->x;
 		int16_t dy = packet->y;
-		
+
 
 		int16_t old_x = player_->x_;
 		int16_t old_y = player_->y_;
@@ -661,6 +679,11 @@ bool SESSION::proccess_packet(unsigned char* buff)
 					add_pkt.x = npc->x_;
 					add_pkt.y = npc->y_;
 					strcpy_s(add_pkt.obj_name, npc->userName_);
+					add_pkt.visual_id = npc->_visualId;
+					add_pkt.hp        = npc->_hp;
+					add_pkt.max_hp    = npc->_maxHp;
+					add_pkt.exp       = npc->_exp;
+					add_pkt.level     = npc->_level;
 					do_send(add_pkt.size, reinterpret_cast<char*>(&add_pkt));
 
 					npc->wake_up();
@@ -788,6 +811,11 @@ void SESSION::send_already_spawn_players()
 					add_pkt.x = npc->x_;
 					add_pkt.y = npc->y_;
 					strcpy_s(add_pkt.obj_name, npc->userName_);
+					add_pkt.visual_id = npc->_visualId;
+					add_pkt.hp        = npc->_hp;
+					add_pkt.max_hp    = npc->_maxHp;
+					add_pkt.exp       = npc->_exp;
+					add_pkt.level     = npc->_level;
 					do_send(add_pkt.size, reinterpret_cast<char*>(&add_pkt));
 
 					visible_players_mutex.lock();
@@ -873,21 +901,52 @@ void client_disconnect(int client_id)
 }
 void npc_initialize()
 {
+	// ── 데이터 경로 설정 (실행 파일 기준 ../../Data/) ──────────────────────────
+	// Visual Studio 기본 실행 디렉터리: Server/Server/ 이므로 ../../Data/ 가 됨.
+	const std::string data_dir = "../../Data/";
+	const std::string lua_path  = data_dir + "npc_config.lua";
+	const std::string spawn_path = data_dir + "map_spawn.bin";
 
-	for (int i = 0; i < NUM_NPCS; ++i)
-	{
-		int npc_id = make_npc_id(npc_index++);
-		auto npc = std::make_shared<NPC>();
-		npc->id_ = npc_id;
-		npc->x_ = rand() % WORLD_WIDTH;
-		npc->y_ = rand() % WORLD_HEIGHT;
-		std::string npc_name = "NPC_" + std::to_string(npc_id);
-		strcpy_s(npc->userName_, npc_name.c_str());
-		npcs[npc_id] = npc;
-		sector.add_object(npc_id, npc->x_, npc->y_); // 섹터에 NPC 추가
+	// ── Step 1. Lua에서 NPC 타입 메타데이터 로드 ─────────────────────────────
+	std::cout << "[Server] Loading npc_config.lua..." << std::endl;
+	auto meta_table   = load_npc_config_lua(lua_path.c_str());
+
+	// ── Step 2. map_spawn.bin에서 스폰 위치 로드 ─────────────────────────────
+	std::cout << "[Server] Loading map_spawn.bin..." << std::endl;
+	auto spawn_entries = load_spawn_map(spawn_path.c_str());
+
+	if (spawn_entries.empty()) {
+		std::cerr << "[Server][FATAL] 스폰 데이터 없음! 경로 확인: "
+		          << spawn_path << std::endl;
+		return;
 	}
-}
 
+	// ── Step 3. 스폰 엔트리 → NPC 객체 생성 ─────────────────────────────────
+	for (auto& entry : spawn_entries)
+	{
+		const NpcMeta& m  = meta_table[entry.type_id];
+		int npc_id        = make_npc_id(npc_index++);
+		auto npc          = std::make_shared<NPC>();
+
+		npc->id_       = npc_id;
+		npc->x_        = entry.x;
+		npc->y_        = entry.y;
+		npc->_npcType  = static_cast<NpcType>(entry.type_id);
+		npc->_visualId = m.visual_id;
+		npc->_hp       = m.hp;
+		npc->_maxHp    = m.max_hp;
+		npc->_level    = static_cast<unsigned char>(m.level);
+		npc->_exp      = m.exp;
+		npc->_attack   = m.attack;
+		strncpy_s(npc->userName_, m.name.c_str(), sizeof(npc->userName_) - 1);
+
+		npcs[npc_id] = npc;
+		sector.add_object(npc_id, npc->x_, npc->y_);
+	}
+
+	std::cout << "[Server] NPC 초기화 완료: "
+	          << spawn_entries.size() << "마리" << std::endl;
+}
 void timer_thread()
 {
 	using namespace std::chrono;
@@ -916,12 +975,12 @@ void timer_thread()
 				switch (top_ev.event_id)
 				{
 				case EVENT_MOVE:
-					{
-						EXP_OVER* move_over = new EXP_OVER;
-						move_over->type = io_type::npc_move;
-						PostQueuedCompletionStatus(h_iocp, -1, top_ev.obj_id, &move_over->over);
-					}
-					break;
+				{
+					EXP_OVER* move_over = new EXP_OVER;
+					move_over->type = io_type::npc_move;
+					PostQueuedCompletionStatus(h_iocp, -1, top_ev.obj_id, &move_over->over);
+				}
+				break;
 				default:
 					std::cout << "Unknown Event Type in Timer Thread!" << std::endl;
 					break;
@@ -930,7 +989,7 @@ void timer_thread()
 			else
 			{
 				// 아직 실행 시간이 되지 않았다면 잠깐 대기
-				std::this_thread::sleep_for(milliseconds(1)); 
+				std::this_thread::sleep_for(milliseconds(1));
 			}
 		}
 		else
@@ -985,8 +1044,8 @@ void worker_thread()
 			new_session->state_ = client_state::connected;
 			if (new_session->player_) {
 				new_session->player_->id_ = current_id;
-				new_session->player_->x_ = rand() % WORLD_WIDTH;
-				new_session->player_->y_ = rand() % WORLD_HEIGHT;
+				new_session->player_->x_ = 1000;
+				new_session->player_->y_ = 1000;
 			}
 			clients.emplace(current_id, new_session);
 			new_session->send_login_success();
