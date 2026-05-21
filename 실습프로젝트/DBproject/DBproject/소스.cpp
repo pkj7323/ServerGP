@@ -68,7 +68,7 @@ int main() {
                 if (retcode == SQL_SUCCESS || retcode == SQL_SUCCESS_WITH_INFO) {
                     retcode = SQLAllocHandle(SQL_HANDLE_STMT, hdbc, &hstmt);
 
-                    retcode = SQLExecDirect(hstmt, (SQLWCHAR*)L"SELECT uid, user_id, user_name, user_level FROM UserTable", SQL_NTS);
+                    retcode = SQLExecDirect(hstmt, (SQLWCHAR*)L"EXEC select_highLevel 1", SQL_NTS);
                     if (retcode == SQL_SUCCESS || retcode == SQL_SUCCESS_WITH_INFO) {
 
 						SQLINTEGER uid;
