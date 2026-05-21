@@ -4,10 +4,62 @@
 #include "RenderManager.h"
 
 LRESULT CALLBACK window_proc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) {
+	auto gm = GameManager::Instance();
+
 	switch (message) {
+	case WM_CHAR: {
+		if (gm->is_chatting()) {
+			if (wParam == VK_BACK) {
+				if (!gm->current_chat_input().empty()) {
+					gm->current_chat_input().pop_back();
+				}
+			} else if (wParam == VK_RETURN) {
+				// Handled in WM_KEYDOWN
+			} else if (wParam >= 32) {
+				gm->current_chat_input() += (wchar_t)wParam;
+			}
+			return 0;
+		}
+		break;
+	}
 	case WM_KEYDOWN: {
-		auto gm = GameManager::Instance();
 		if (!gm->players().contains(gm->my_id())) break;
+
+		// Chat Toggle & Sending
+		if (wParam == VK_RETURN) {
+			if (gm->is_chatting()) {
+				// Send Chat
+				std::wstring wmsg = gm->current_chat_input();
+				if (!wmsg.empty()) {
+					int len = WideCharToMultiByte(CP_ACP, 0, wmsg.c_str(), -1, NULL, 0, NULL, NULL);
+					std::string msg(len, 0);
+					WideCharToMultiByte(CP_ACP, 0, wmsg.c_str(), -1, &msg[0], len, NULL, NULL);
+					if (!msg.empty() && msg.back() == '\0') msg.pop_back();
+
+					C2S_Chat p;
+					p.size = sizeof(p);
+					p.type = C2S_CHAT;
+					strncpy_s(p.message, msg.c_str(), MAX_CHAT_MSG_LEN - 1);
+					NetworkManager::Instance()->send_packet(&p);
+					gm->current_chat_input().clear();
+				}
+				gm->set_chatting(false);
+			} else {
+				gm->set_chatting(true);
+			}
+			return 0;
+		}
+
+		if (gm->is_chatting()) return 0; // Ignore other keys when chatting
+
+		if (wParam == 'E') {
+			gm->toggle_inventory();
+			return 0;
+		}
+		if (wParam == VK_SPACE) {
+			// Interact / Next dialogue (placeholder for later)
+			return 0;
+		}
 
 		int curr_x = gm->players()[gm->my_id()].x;
 		int curr_y = gm->players()[gm->my_id()].y;
@@ -18,16 +70,16 @@ LRESULT CALLBACK window_proc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lPar
 		switch (wParam) {
 		case VK_LEFT:  dx = -1; break;
 		case VK_RIGHT: dx = 1;  break;
-		case VK_UP:    dy = 1;  break; // Y-up: À§·Î °¡¸é Y Áõ°¡ (+1)
-		case VK_DOWN:  dy = -1; break; // Y-up: ¾Æ·¡·Î °¡¸é Y °¨¼Ò (-1)
+		case VK_UP:    dy = 1;  break; // Y-up: ìœ„ë¡œ ê°€ë©´ Y ì¦ê°€ (+1)
+		case VK_DOWN:  dy = -1; break; // Y-up: ì•„ëž˜ë¡œ ê°€ë©´ Y ê°ì†Œ (-1)
 		case VK_ESCAPE: gm->set_running(false); return 0;
 		default: return DefWindowProc(hWnd, message, wParam, lParam);
 		}
 
-		// Å¬¶óÀÌ¾ðÆ® »çÀÌµå Ãæµ¹ Ã¼Å© (ÇöÀç À§Ä¡ + ¹æÇâ)
+		// í´ë¼ì´ì–¸íŠ¸ ì‚¬ì´ë“œ ì¶©ëŒ ì²´í¬ (í˜„ìž¬ ìœ„ì¹˜ + ë°©í–¥)
 		if (gm->can_move(curr_x + dx, curr_y + dy)) {
 
-			// C2S_Move´Â ¹æÇâ(dx, dy)À» ´ã¾Æ¼­ ¼­¹ö·Î Àü¼Û
+			// C2S_MoveëŠ” ë°©í–¥(dx, dy)ì„ ë‹´ì•„ì„œ ì„œë²„ë¡œ ì „ì†¡
 			C2S_Move p;
 			p.size = sizeof(p);
 			p.type = C2S_MOVE;
@@ -37,8 +89,8 @@ LRESULT CALLBACK window_proc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lPar
 
 			NetworkManager::Instance()->send_packet(&p);
 
-			// Âü°í: S2C_MOVE_OBJECT¸¦ ¹Þ±â Àü±îÁö Å¬¶óÀÌ¾ðÆ® È­¸éÀº
-			// °»½ÅµÇÁö ¾ÊÀ¸¹Ç·Î, 0.5ÃÊ ÄðÅ¸ÀÓ Ã³¸®´Â ¼­¹ö°¡ ´ã´çÇÕ´Ï´Ù.
+			// ì°¸ê³ : S2C_MOVE_OBJECTë¥¼ ë°›ê¸° ì „ê¹Œì§€ í´ë¼ì´ì–¸íŠ¸ í™”ë©´ì€
+			// ê°±ì‹ ë˜ì§€ ì•Šìœ¼ë¯€ë¡œ, 0.5ì´ˆ ì¿¨íƒ€ìž„ ì²˜ë¦¬ëŠ” ì„œë²„ê°€ ë‹´ë‹¹í•©ë‹ˆë‹¤.
 		}
 		return 0;
 	}
@@ -49,6 +101,9 @@ LRESULT CALLBACK window_proc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lPar
 }
 
 int WINAPI WinMain(HINSTANCE hI, HINSTANCE hP, LPSTR lp, int nS) {
+	Gdiplus::GdiplusStartupInput gdiplusStartupInput;
+	ULONG_PTR gdiplusToken;
+	Gdiplus::GdiplusStartup(&gdiplusToken, &gdiplusStartupInput, NULL);
 	const wchar_t CLASS_NAME[] = L"ServerTestWindowClass";
 	WNDCLASS wc = {};
 	wc.lpfnWndProc = window_proc;
@@ -106,6 +161,7 @@ int WINAPI WinMain(HINSTANCE hI, HINSTANCE hP, LPSTR lp, int nS) {
 	}
 
 	nm->Disconnect();
+	Gdiplus::GdiplusShutdown(gdiplusToken);
 
 	return 0;
 }

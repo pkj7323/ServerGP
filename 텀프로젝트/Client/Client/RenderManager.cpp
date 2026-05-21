@@ -24,14 +24,14 @@ void RenderManager::Render(HWND hWnd)
 	HBITMAP memBitmap = CreateCompatibleBitmap(hdc, width, height);
 	HBITMAP oldBitmap = (HBITMAP)SelectObject(memDC, memBitmap);
 
-	// πË∞Ê (∞À¿∫ªˆ)
+	// Î∞∞Í≤Ω (Í≤ÄÏùÄÏÉâ)
 	FillRect(memDC, &clientRect, (HBRUSH)GetStockObject(BLACK_BRUSH));
 
-	// ∏≈≈©∑Œ∞° æ¯¿∏∏È 15x15 ±‚¡ÿ¿∏∑Œ º≥¡§
+	// Îß§ÌÅ¨Î°úÍ∞Ä ÏóÜÏúºÎ©¥ 15x15 Í∏∞Ï§ÄÏúºÎ°ú ÏÑ§Ï†ï
 	int cellWidth = width / VIEW_WIDTH;
 	int cellHeight = height / VIEW_HEIGHT;
 
-	// Viewport ∞ËªÍ (Y-up ±‚¡ÿ: bottom_y∞° »≠∏È ∏« πÿ ¡Ÿ)
+	// Viewport Í≥ÑÏÇ∞ (Y-up Í∏∞Ï§Ä: bottom_yÍ∞Ä ÌôîÎ©¥ Îß® Î∞ë Ï§Ñ)
 	int left_x = 0, bottom_y = 0;
 	int my_id = gm->my_id();
 	auto& players = gm->players();
@@ -44,13 +44,13 @@ void RenderManager::Render(HWND hWnd)
 		bottom_y = std::clamp(bottom_y, 0, WORLD_HEIGHT - VIEW_HEIGHT);
 	}
 
-	// 1. ¡ˆ«¸ ∑ª¥ı∏µ
+	// 1. ÏßÄÌòï Î†åÎçîÎßÅ
 	for (int y = 0; y < VIEW_HEIGHT; ++y) {
 		for (int x = 0; x < VIEW_WIDTH; ++x) {
 			int world_x = left_x + x;
-			int world_y = bottom_y + y; // y=0¿Ã »≠∏È πÿπŸ¥⁄
+			int world_y = bottom_y + y; // y=0Ïù¥ ÌôîÎ©¥ Î∞ëÎ∞îÎã•
 
-			// GDI ∑ª¥ı∏µ¿ª ¿ß«ÿ ∏¥œ≈Õ ¡¬«•∞Ë∑Œ ∫Ø»Ø (ªÛ«œ π›¿¸)
+			// GDI Î†åÎçîÎßÅÏùÑ ÏúÑÌï¥ Î™®ÎãàÌÑ∞ Ï¢åÌëúÍ≥ÑÎ°ú Î≥ÄÌôò (ÏÉÅÌïò Î∞òÏ†Ñ)
 			int screen_y = (VIEW_HEIGHT - 1 - y);
 			RECT rect = { x * cellWidth, screen_y * cellHeight, (x + 1) * cellWidth, (screen_y + 1) * cellHeight };
 
@@ -65,7 +65,7 @@ void RenderManager::Render(HWND hWnd)
 			case 5: color = RGB(210, 180, 140); break; // SANDSTONE
 			case 6: color = RGB(255, 250, 250); break; // SNOW
 			case 7: color = RGB(175, 238, 238); break; // ICE
-			default: color = RGB(47, 79, 79); break;   // ±‚∫ª
+			default: color = RGB(47, 79, 79); break;   // Í∏∞Î≥∏
 			}
 
 			HBRUSH hBrush = CreateSolidBrush(color);
@@ -75,13 +75,13 @@ void RenderManager::Render(HWND hWnd)
 	}
 	SetBkMode(memDC, TRANSPARENT);
 	SetTextColor(memDC, RGB(255, 255, 255));
-	// 2. NPC ∑ª¥ı∏µ
+	// 2. NPC Î†åÎçîÎßÅ
 	for (auto& [id, npc] : npcs) {
 		int rel_x = npc.x - left_x;
 		int rel_y = npc.y - bottom_y;
 
 		if (rel_x >= 0 && rel_x < VIEW_WIDTH && rel_y >= 0 && rel_y < VIEW_HEIGHT) {
-			int screen_y = (VIEW_HEIGHT - 1 - rel_y); // NPCµµ Y π›¿¸
+			int screen_y = (VIEW_HEIGHT - 1 - rel_y); // NPCÎèÑ Y Î∞òÏ†Ñ
 
 			HBRUSH hBrush = CreateSolidBrush(RGB(0, 255, 0));
 			HBRUSH oldB = (HBRUSH)SelectObject(memDC, hBrush);
@@ -95,8 +95,8 @@ void RenderManager::Render(HWND hWnd)
 
 			Ellipse(memDC, px, py, pr, pb);
 
-			// --- ¿Ã∏ß √‚∑¬ ∑Œ¡˜ √ﬂ∞° ---
-			// ¿Ø¥œƒ⁄µÂ »Ø∞Ê »£»Øº∫¿ª ¿ß«ÿ std::string -> std::wstring ∫Ø»Ø
+			// --- Ïù¥Î¶Ñ Ï∂úÎ†• Î°úÏßÅ Ï∂îÍ∞Ä ---
+			// Ïú†ÎãàÏΩîÎìú ÌôòÍ≤Ω Ìò∏ÌôòÏÑ±ÏùÑ ÏúÑÌï¥ std::string -> std::wstring Î≥ÄÌôò
 			std::wstring wName(npc.name.begin(), npc.name.end());
 			TextOut(memDC, px, py - 20, wName.c_str(), wName.length());
 
@@ -105,13 +105,13 @@ void RenderManager::Render(HWND hWnd)
 		}
 	}
 
-	// 3. Player ∑ª¥ı∏µ (µø¿œ«œ∞‘ Y π›¿¸)
+	// 3. Player Î†åÎçîÎßÅ (ÎèôÏùºÌïòÍ≤å Y Î∞òÏ†Ñ)
 	for (auto& [id, player] : players) {
 		int rel_x = player.x - left_x;
 		int rel_y = player.y - bottom_y;
 
 		if (rel_x >= 0 && rel_x < VIEW_WIDTH && rel_y >= 0 && rel_y < VIEW_HEIGHT) {
-			int screen_y = (VIEW_HEIGHT - 1 - rel_y); // «√∑π¿ÃæÓµµ Y π›¿¸
+			int screen_y = (VIEW_HEIGHT - 1 - rel_y); // ÌîåÎ†àÏù¥Ïñ¥ÎèÑ Y Î∞òÏ†Ñ
 
 			HBRUSH hBrush = CreateSolidBrush(id == my_id ? RGB(255, 0, 0) : RGB(0, 0, 255));
 			HBRUSH oldB = (HBRUSH)SelectObject(memDC, hBrush);
@@ -124,7 +124,7 @@ void RenderManager::Render(HWND hWnd)
 			int pb = (screen_y + 1) * cellHeight - padY;
 
 			Ellipse(memDC, px, py, pr, pb);
-			// --- ¿Ã∏ß √‚∑¬ ∑Œ¡˜ √ﬂ∞° ---
+			// --- Ïù¥Î¶Ñ Ï∂úÎ†• Î°úÏßÅ Ï∂îÍ∞Ä ---
 			std::wstring wName(player.name.begin(), player.name.end());
 			TextOut(memDC, px, py - 20, wName.c_str(), wName.length());
 
@@ -133,7 +133,7 @@ void RenderManager::Render(HWND hWnd)
 		}
 	}
 
-	// 4. øÏ√¯ ªÛ¥‹ ≥ª ¡¬«• UI √‚∑¬
+	// 4. Ïö∞Ï∏° ÏÉÅÎã® ÎÇ¥ Ï¢åÌëú UI Ï∂úÎ†•
 	if (players.contains(my_id)) {
 		int my_x = players[my_id].x;
 		int my_y = players[my_id].y;
@@ -141,14 +141,109 @@ void RenderManager::Render(HWND hWnd)
 		std::wstring coordText = L"Pos: (" + std::to_wstring(my_x) + L", " + std::to_wstring(my_y) + L")";
 
 		SetBkMode(memDC, TRANSPARENT);
-		SetTextColor(memDC, RGB(255, 255, 0)); // ¥´ø° »Æ ∂Á∞‘ ≥Î∂ıªˆ¿∏∑Œ º≥¡§
+		SetTextColor(memDC, RGB(255, 255, 0)); // ÎààÏóê Ìôï ÎùÑÍ≤å ÎÖ∏ÎûÄÏÉâÏúºÎ°ú ÏÑ§Ï†ï
 
-		// »≠∏È øÏ√¯ ªÛ¥‹ øµø™ ¡ˆ¡§ (øÏ√¯ø°º≠ 20px, ¿ßø°º≠ 10px ø©πÈ)
+		// ÌôîÎ©¥ Ïö∞Ï∏° ÏÉÅÎã® ÏòÅÏó≠ ÏßÄÏ†ï (Ïö∞Ï∏°ÏóêÏÑú 20px, ÏúÑÏóêÏÑú 10px Ïó¨Î∞±)
 		RECT uiRect = { 0, 10, width - 20, 50 };
 		DrawText(memDC, coordText.c_str(), -1, &uiRect, DT_RIGHT | DT_TOP | DT_SINGLELINE);
 	}
 
-	// »≠∏È ∫πªÁ
+	// --- GDI+ UI Rendering ---
+	{
+		Gdiplus::Graphics graphics(memDC);
+		Gdiplus::FontFamily fontFamily(L"Malgun Gothic");
+		Gdiplus::Font font(&fontFamily, 14, Gdiplus::FontStyleBold, Gdiplus::UnitPixel);
+		Gdiplus::SolidBrush whiteBrush(Gdiplus::Color(255, 255, 255, 255));
+		Gdiplus::SolidBrush yellowBrush(Gdiplus::Color(255, 255, 255, 0));
+		Gdiplus::SolidBrush blackTransBrush(Gdiplus::Color(150, 0, 0, 0));
+
+		// 4.5 Draw In-Game Chat Bubbles
+		auto draw_bubble = [&](auto& obj_map) {
+			for (auto& [id, obj] : obj_map) {
+				if (obj.chat_msg.empty()) continue;
+				auto now = std::chrono::steady_clock::now();
+				if (std::chrono::duration_cast<std::chrono::seconds>(now - obj.chat_time).count() > 4) {
+					obj.chat_msg.clear(); // Expire after 4 seconds
+					continue;
+				}
+
+				int rel_x = obj.x - left_x;
+				int rel_y = obj.y - bottom_y;
+				if (rel_x >= 0 && rel_x < VIEW_WIDTH && rel_y >= 0 && rel_y < VIEW_HEIGHT) {
+					int screen_y = (VIEW_HEIGHT - 1 - rel_y);
+					int px = rel_x * cellWidth + (cellWidth / 2);
+					int py = screen_y * cellHeight - 30; // Above head
+
+					Gdiplus::RectF bounds;
+					graphics.MeasureString(obj.chat_msg.c_str(), -1, &font, Gdiplus::PointF(0, 0), &bounds);
+					
+					Gdiplus::SolidBrush bubbleBrush(Gdiplus::Color(220, 255, 255, 255));
+					Gdiplus::SolidBrush textBrush(Gdiplus::Color(255, 0, 0, 0));
+					
+					graphics.FillRectangle(&bubbleBrush, px - bounds.Width / 2 - 5, py - bounds.Height - 5, bounds.Width + 10, bounds.Height + 10);
+					graphics.DrawString(obj.chat_msg.c_str(), -1, &font, Gdiplus::PointF(px - bounds.Width / 2, py - bounds.Height), &textBrush);
+				}
+			}
+		};
+		draw_bubble(players);
+		draw_bubble(npcs);
+
+		// 5. Draw Chat Logs (Bottom Left)
+		int chatStartX = 10;
+		int chatStartY = height - 100; // Up from bottom
+		
+		auto& logs = gm->chat_logs();
+		int logY = chatStartY - (logs.size() * 18);
+		
+		if (logs.size() > 0) {
+			graphics.FillRectangle(&blackTransBrush, chatStartX, logY, 350, (int)logs.size() * 18 + 5);
+			for (auto& wLog : logs) {
+				graphics.DrawString(wLog.c_str(), -1, &font, Gdiplus::PointF(chatStartX + 5, logY), &whiteBrush);
+				logY += 18;
+			}
+		}
+
+		// 6. Draw Current Chat Input
+		if (gm->is_chatting()) {
+			graphics.FillRectangle(&blackTransBrush, chatStartX, chatStartY + 10, 350, 24);
+			std::wstring wPrompt = L"Chat: " + gm->current_chat_input() + L"_";
+			graphics.DrawString(wPrompt.c_str(), -1, &font, Gdiplus::PointF(chatStartX + 5, chatStartY + 14), &yellowBrush);
+		}
+
+		// 7. Draw HUD (Hotbar Placeholder)
+		int hotbarWidth = 300;
+		int hotbarHeight = 40;
+		int hotbarX = (width - hotbarWidth) / 2;
+		int hotbarY = height - hotbarHeight - 10;
+		graphics.FillRectangle(&blackTransBrush, hotbarX, hotbarY, hotbarWidth, hotbarHeight);
+		Gdiplus::Pen whitePen(Gdiplus::Color(255, 255, 255, 255), 2.0f);
+		for (int i = 0; i < 5; ++i) {
+			graphics.DrawRectangle(&whitePen, hotbarX + i * 40 + 55, hotbarY + 5, 30, 30);
+		}
+		graphics.DrawString(L"1", -1, &font, Gdiplus::PointF(hotbarX + 55 + 10, hotbarY - 15), &whiteBrush);
+		graphics.DrawString(L"2", -1, &font, Gdiplus::PointF(hotbarX + 95 + 10, hotbarY - 15), &whiteBrush);
+
+		// 8. Draw Inventory (if toggled)
+		if (gm->show_inventory()) {
+			int invWidth = 400;
+			int invHeight = 300;
+			int invX = (width - invWidth) / 2;
+			int invY = (height - invHeight) / 2;
+			Gdiplus::SolidBrush darkGrayBrush(Gdiplus::Color(220, 40, 40, 40));
+			graphics.FillRectangle(&darkGrayBrush, invX, invY, invWidth, invHeight);
+			graphics.DrawRectangle(&whitePen, invX, invY, invWidth, invHeight);
+			graphics.DrawString(L"[ INVENTORY ]", -1, &font, Gdiplus::PointF(invX + 150, invY + 10), &whiteBrush);
+			
+			// Draw some dummy slots
+			for(int r=0; r<4; ++r) {
+				for(int c=0; c<9; ++c) {
+					graphics.DrawRectangle(&whitePen, invX + 20 + c*40, invY + 50 + r*40, 30, 30);
+				}
+			}
+		}
+	}
+
+	// ÌôîÎ©¥ Î≥µÏÇ¨
 	BitBlt(hdc, 0, 0, width, height, memDC, 0, 0, SRCCOPY);
 	SelectObject(memDC, oldBitmap);
 	DeleteObject(memBitmap);

@@ -538,6 +538,30 @@ public:
 				if (s) s->send_remove_player(id_);
 			}
 		}
+
+		// 10% 확률로 주변 플레이어에게 메시지 보내기
+		if (!new_vl.empty() && (rand() % 10) == 0) {
+			S2C_ChatMessage chat_pkt;
+			chat_pkt.size = sizeof(chat_pkt);
+			chat_pkt.type = S2C_CHAT_MESSAGE;
+			chat_pkt.object_id = id_;
+			
+			const char* msgs[] = {
+				"크르르르...",
+				"누구냐!",
+				"가까이 오지마라!",
+				"침입자 발견!"
+			};
+			strcpy_s(chat_pkt.message, msgs[rand() % 4]);
+			
+			for (auto& player_id : new_vl) {
+				std::shared_ptr<SESSION> s = clients[player_id].load();
+				if (s && s->state_ == client_state::playing) {
+					s->do_send(chat_pkt.size, reinterpret_cast<char*>(&chat_pkt));
+				}
+			}
+		}
+
 		return !new_vl.empty();
 	}
 	void wake_up()
@@ -730,6 +754,32 @@ bool SESSION::proccess_packet(unsigned char* buff)
 					std::shared_ptr<SESSION> s = clients[id].load();
 					if (s) s->send_remove_player(id_);
 				}
+			}
+		}
+		break;
+	}
+	case PACKET_TYPE::C2S_CHAT:
+	{
+		C2S_Chat* packet = reinterpret_cast<C2S_Chat*>(buff);
+
+		S2C_ChatMessage chat_pkt;
+		chat_pkt.size = sizeof(chat_pkt);
+		chat_pkt.type = S2C_CHAT_MESSAGE;
+		chat_pkt.object_id = id_;
+		strncpy_s(chat_pkt.message, packet->message, MAX_CHAT_MSG_LEN - 1);
+
+		// 1. 나 자신에게 에코(Echo)
+		do_send(chat_pkt.size, reinterpret_cast<char*>(&chat_pkt));
+
+		// 2. 내 시야에 있는 다른 플레이어들에게 브로드캐스트
+		visible_players_mutex.lock();
+		auto view_copy = visible_players;
+		visible_players_mutex.unlock();
+
+		for (auto& pid : view_copy) {
+			std::shared_ptr<SESSION> s = clients[pid].load();
+			if (s && s->state_ == client_state::playing) {
+				s->do_send(chat_pkt.size, reinterpret_cast<char*>(&chat_pkt));
 			}
 		}
 		break;

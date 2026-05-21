@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include "Singleton.h"
 #include "Object.h"
@@ -41,7 +41,26 @@ public:
 		return _visualMap[y * WORLD_WIDTH + x];
 	}
 
+	// -- UI & Chat States --
+	std::vector<std::wstring>& chat_logs() { return _chatLogs; }
+	void add_chat_log(const std::wstring& msg) { 
+		_chatLogs.push_back(msg); 
+		if (_chatLogs.size() > 10) _chatLogs.erase(_chatLogs.begin());
+	}
+	
+	bool is_chatting() const { return _isChatting; }
+	void set_chatting(bool val) { _isChatting = val; }
+	
+	std::wstring& current_chat_input() { return _currentChatInput; }
+	
+	bool show_inventory() const { return _showInventory; }
+	void toggle_inventory() { _showInventory = !_showInventory; }
+
 private:
+	std::vector<std::wstring> _chatLogs;
+	bool _isChatting = false;
+	std::wstring _currentChatInput = L"";
+	bool _showInventory = false;
 	std::unordered_map<int, Object> _players;
 	std::unordered_map<int, Object> _npcs;
 	int _myId;

@@ -1,4 +1,4 @@
-﻿#include "pch.h"
+#include "pch.h"
 #include "NetworkManager.h"
 
 #include "common.h"
@@ -143,6 +143,41 @@ void NetworkManager::process_packet(char* ptr)
 			gm->players()[p->object_id].x = p->x;
 			gm->players()[p->object_id].y = p->y;
 		}
+		break;
+	}
+	case S2C_CHAT_MESSAGE: {
+		S2C_ChatMessage* p = reinterpret_cast<S2C_ChatMessage*>(ptr);
+		std::wstring sender = L"Unknown";
+		
+		std::string msg_str = p->message;
+		int wlen = MultiByteToWideChar(CP_ACP, 0, msg_str.c_str(), -1, NULL, 0);
+		std::wstring wmsg(wlen, 0);
+		MultiByteToWideChar(CP_ACP, 0, msg_str.c_str(), -1, &wmsg[0], wlen);
+		if (!wmsg.empty() && wmsg.back() == L'\0') wmsg.pop_back();
+
+		// In-game Chat Bubble Logic
+		if (is_npc_id(p->object_id) && gm->npcs().contains(p->object_id)) {
+			std::string s_name = gm->npcs()[p->object_id].name;
+			int n_len = MultiByteToWideChar(CP_ACP, 0, s_name.c_str(), -1, NULL, 0);
+			sender.assign(n_len, 0);
+			MultiByteToWideChar(CP_ACP, 0, s_name.c_str(), -1, &sender[0], n_len);
+			if (!sender.empty() && sender.back() == L'\0') sender.pop_back();
+
+			gm->npcs()[p->object_id].chat_msg = wmsg;
+			gm->npcs()[p->object_id].chat_time = std::chrono::steady_clock::now();
+		} else if (gm->players().contains(p->object_id)) {
+			std::string s_name = gm->players()[p->object_id].name;
+			int n_len = MultiByteToWideChar(CP_ACP, 0, s_name.c_str(), -1, NULL, 0);
+			sender.assign(n_len, 0);
+			MultiByteToWideChar(CP_ACP, 0, s_name.c_str(), -1, &sender[0], n_len);
+			if (!sender.empty() && sender.back() == L'\0') sender.pop_back();
+
+			gm->players()[p->object_id].chat_msg = wmsg;
+			gm->players()[p->object_id].chat_time = std::chrono::steady_clock::now();
+		}
+		
+		std::wstring logMsg = L"[" + sender + L"] " + wmsg;
+		gm->add_chat_log(logMsg);
 		break;
 	}
 	case S2C_REMOVE_OBJECT: {
