@@ -13,6 +13,14 @@ void error_display(const std::wstring& msg, int err_no) {
 	LocalFree(lpMsgBuf);
 }
 
+void NetworkManager::Release()
+{
+	if (_socket != INVALID_SOCKET) {
+		closesocket(_socket);
+		_socket = INVALID_SOCKET;
+	}
+}
+
 bool NetworkManager::Connect(const std::string& ip, int port)
 {
 	WSADATA wsa; WSAStartup(MAKEWORD(2, 2), &wsa);
@@ -113,20 +121,20 @@ void NetworkManager::process_packet(char* ptr)
 	case S2C_AVATAR_INFO: {
 		S2C_AvatarInfo* p = reinterpret_cast<S2C_AvatarInfo*>(ptr);
 		gm->set_my_id(p->playerId);
-		gm->players()[p->playerId] = { p->playerId, gm->username(), p->x, p->y };
-		std::cout << "Avatar Info: ID=" << p->playerId << " at (" << p->x << ", " << p->y << ")\n";
+		gm->players()[p->playerId] = { p->playerId, gm->username(), p->x, p->y, p->armor_tier };
+		std::cout << "Avatar Info: ID=" << p->playerId << " at (" << p->x << ", " << p->y << "), ArmorTier=" << (int)p->armor_tier << "\n";
 		break;
 	}
 	case S2C_ADD_OBJECT: {
 		S2C_AddObject* p = reinterpret_cast<S2C_AddObject*>(ptr);
 		if (is_npc_id(p->object_id))
 		{
-			gm->npcs().emplace(p->object_id, Object{ p->object_id, p->obj_name, p->x, p->y });
+			gm->npcs().emplace(p->object_id, Object{ p->object_id, p->obj_name, p->x, p->y, p->armor_tier });
 		}
 		else if (p->object_id == gm->my_id()) break;
 		else {
-			gm->players().emplace(p->object_id, Object{ p->object_id, p->obj_name, p->x, p->y });
-			std::cout << "Add Player: ID=" << p->object_id << ", Name=" << p->obj_name << " at (" << p->x << ", " << p->y << ")\n";
+			gm->players().emplace(p->object_id, Object{ p->object_id, p->obj_name, p->x, p->y, p->armor_tier });
+			std::cout << "Add Player: ID=" << p->object_id << ", Name=" << p->obj_name << " at (" << p->x << ", " << p->y << "), ArmorTier=" << (int)p->armor_tier << "\n";
 		}
 		break;
 	}

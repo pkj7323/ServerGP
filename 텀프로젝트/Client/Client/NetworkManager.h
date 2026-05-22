@@ -7,6 +7,8 @@ class NetworkManager : public Singleton<NetworkManager>
 {
 	friend class Singleton<NetworkManager>;
 public:
+	void Release() override;
+
 	bool Connect(const std::string& ip, int port);
 	void Disconnect();
 	

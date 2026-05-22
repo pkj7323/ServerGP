@@ -12,6 +12,7 @@ public:
 	GameManager() : _isRunning(true), _myId(-1) {}
 
 	void Init() override;
+	void Release() override;
 
 
 	std::unordered_map<int, Object>& players() { return _players; }

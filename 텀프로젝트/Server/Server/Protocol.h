@@ -90,6 +90,7 @@ struct S2C_AvatarInfo {
 	int max_hp;
 	unsigned long long exp;
 	unsigned char level;
+	char armor_tier; // 0: None, 1: Copper, 2: Iron, 3: Diamond, 4: Netherite
 };
 
 struct S2C_AddObject {
@@ -104,6 +105,7 @@ struct S2C_AddObject {
 	int max_hp;
 	unsigned long long exp;
 	unsigned char level;
+	char armor_tier; // 0: None, 1: Copper, 2: Iron, 3: Diamond, 4: Netherite
 };
 
 struct S2C_RemoveObject {
@@ -136,6 +138,7 @@ struct S2C_StatusChange {
 	int max_hp;
 	unsigned long long exp;
 	unsigned char level;
+	char armor_tier; // 0: None, 1: Copper, 2: Iron, 3: Diamond, 4: Netherite
 };
 
 #pragma pack(pop) // Restore default packing

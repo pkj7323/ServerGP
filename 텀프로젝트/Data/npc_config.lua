@@ -105,3 +105,12 @@ end
 function is_valid_npc_type(type_id)
     return NPC_TYPES[type_id] ~= nil
 end
+-- =============================================================================
+-- Armor Thresholds
+-- =============================================================================
+ARMOR_THRESHOLDS = {
+    COPPER = 20,
+    IRON = 100,
+    DIAMOND = 200,
+    NETHERITE = 300
+}

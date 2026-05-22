@@ -159,8 +159,8 @@ int WINAPI WinMain(HINSTANCE hI, HINSTANCE hP, LPSTR lp, int nS) {
 			rm->Render(hWnd);
 		}
 	}
-
 	nm->Disconnect();
+	gm->Release();
 	Gdiplus::GdiplusShutdown(gdiplusToken);
 
 	return 0;

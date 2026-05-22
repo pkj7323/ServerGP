@@ -8,6 +8,26 @@ RenderManager::~RenderManager()
 		DeleteObject(_hBoardBmp);
 		_hBoardBmp = NULL;
 	}
+	for (int i = 1; i <= 4; ++i) {
+		if (_helmets[i]) {
+			delete _helmets[i];
+			_helmets[i] = nullptr;
+		}
+	}
+}
+
+void RenderManager::Release()
+{
+	if (_hBoardBmp) {
+		DeleteObject(_hBoardBmp);
+		_hBoardBmp = NULL;
+	}
+	for (int i = 1; i <= 4; ++i) {
+		if (_helmets[i]) {
+			delete _helmets[i];
+			_helmets[i] = nullptr;
+		}
+	}
 }
 
 void RenderManager::Render(HWND hWnd)
@@ -187,6 +207,27 @@ void RenderManager::Render(HWND hWnd)
 		};
 		draw_bubble(players);
 		draw_bubble(npcs);
+
+		// 4.6 Draw Helmets for Players
+		for (auto& [id, player] : players) {
+			if (player.armor_tier > 0 && player.armor_tier <= 4) {
+				int rel_x = player.x - left_x;
+				int rel_y = player.y - bottom_y;
+				if (rel_x >= 0 && rel_x < VIEW_WIDTH && rel_y >= 0 && rel_y < VIEW_HEIGHT) {
+					int screen_y = (VIEW_HEIGHT - 1 - rel_y);
+					int px = rel_x * cellWidth + (cellWidth / 2);
+					int py = screen_y * cellHeight;
+					
+					Gdiplus::Image* helmet_img = _helmets[player.armor_tier];
+					if (helmet_img) {
+						int img_w = helmet_img->GetWidth() * 2; // scale if needed
+						int img_h = helmet_img->GetHeight() * 2;
+						// Draw helmet above the head
+						graphics.DrawImage(helmet_img, px - img_w / 2, py - 40, img_w, img_h);
+					}
+				}
+			}
+		}
 
 		// 5. Draw Chat Logs (Bottom Left)
 		int chatStartX = 10;

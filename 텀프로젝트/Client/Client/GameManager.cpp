@@ -1,11 +1,22 @@
 ﻿#include "pch.h"
 #include "GameManager.h"
+
+#include "NetworkManager.h"
+#include "RenderManager.h"
+
 void GameManager::Init()
 {
 	std::cout << "Initializing GameManager...\n";
 	std::cout << "Loading map data from files...\n";
 	load_map();
 	std::cout << "Map loaded finished.\n";
+}
+
+void GameManager::Release()
+{
+	NetworkManager::Instance()->Release();
+	RenderManager::Instance()->Release();
+	_players.clear();
 }
 
 void GameManager::load_map()

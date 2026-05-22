@@ -267,6 +267,7 @@ private:
 	const int AVERAGE_EXPECTED_OBJECTS = 50;
 };
 Sector sector;
+ArmorConfig g_armor_config;
 
 class BaseObject {
 public:
@@ -281,7 +282,17 @@ public:
 
 class Player : public BaseObject {
 public:
+	int _armor = 0;
+
 	Player() : BaseObject() {}
+
+	char get_armor_tier() const {
+		if (_armor >= g_armor_config.netherite) return 4;
+		if (_armor >= g_armor_config.diamond) return 3;
+		if (_armor >= g_armor_config.iron) return 2;
+		if (_armor >= g_armor_config.copper) return 1;
+		return 0;
+	}
 };
 
 
@@ -412,6 +423,7 @@ public:
 		info_packet.playerId = id_;
 		info_packet.x = player_->x_;
 		info_packet.y = player_->y_;
+		info_packet.armor_tier = player_->get_armor_tier();
 		do_send(sizeof(S2C_AvatarInfo), reinterpret_cast<char*>(&info_packet));
 	}
 
@@ -708,6 +720,7 @@ bool SESSION::proccess_packet(unsigned char* buff)
 					add_pkt.max_hp    = npc->_maxHp;
 					add_pkt.exp       = npc->_exp;
 					add_pkt.level     = npc->_level;
+					add_pkt.armor_tier = 0; // NPCs don't have armor tier
 					do_send(add_pkt.size, reinterpret_cast<char*>(&add_pkt));
 
 					npc->wake_up();
@@ -833,6 +846,7 @@ void SESSION::send_add_player(int player_id)
 	strncpy_s(add_packet.obj_name, session->player_->userName_, MAX_NAME_LEN);
 	add_packet.x = session->player_->x_;
 	add_packet.y = session->player_->y_;
+	add_packet.armor_tier = session->player_->get_armor_tier();
 
 	visible_players_mutex.lock();
 	if (visible_players.contains(player_id))
@@ -866,6 +880,7 @@ void SESSION::send_already_spawn_players()
 					add_pkt.max_hp    = npc->_maxHp;
 					add_pkt.exp       = npc->_exp;
 					add_pkt.level     = npc->_level;
+					add_pkt.armor_tier = 0;
 					do_send(add_pkt.size, reinterpret_cast<char*>(&add_pkt));
 
 					visible_players_mutex.lock();
@@ -960,6 +975,7 @@ void npc_initialize()
 	// ── Step 1. Lua에서 NPC 타입 메타데이터 로드 ─────────────────────────────
 	std::cout << "[Server] Loading npc_config.lua..." << std::endl;
 	auto meta_table   = load_npc_config_lua(lua_path.c_str());
+	g_armor_config    = load_armor_config_lua(lua_path.c_str());// 이건 부수적인건데 일단 추가
 
 	// ── Step 2. map_spawn.bin에서 스폰 위치 로드 ─────────────────────────────
 	std::cout << "[Server] Loading map_spawn.bin..." << std::endl;
@@ -1096,10 +1112,14 @@ void worker_thread()
 				new_session->player_->id_ = current_id;
 				new_session->player_->x_ = 1000;
 				new_session->player_->y_ = 1000;
+				new_session->player_->_armor = g_armor_config.copper;
+
+				sector.add_object(current_id, new_session->player_->x_, new_session->player_->y_);
 			}
 			clients.emplace(current_id, new_session);
 			new_session->send_login_success();
 			new_session->do_recv();
+
 
 
 			o->accept_socket = WSASocket(AF_INET, SOCK_STREAM, 0, NULL, 0, WSA_FLAG_OVERLAPPED);

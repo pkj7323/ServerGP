@@ -8,6 +8,7 @@ public:
 	int id;
 	std::string name;
 	int16_t x, y;
+	char armor_tier = 0;
 
 	// In-game Chat Bubble
 	std::wstring chat_msg;
