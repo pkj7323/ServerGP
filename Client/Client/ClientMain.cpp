@@ -1,4 +1,4 @@
-﻿#define NOMINMAX
+#define NOMINMAX
 #include <ws2tcpip.h>
 #include <windows.h>
 #pragma comment(lib, "ws2_32.lib")
@@ -77,6 +77,7 @@ void process_packet(char* ptr) {
 			std::cout << "Login successful. Message: " << p->msg << "\n";
 		} else {
 			std::cout << "Login failed. Message: " << p->msg << "\n";
+			MessageBoxW(NULL, L"등록되지 않은 아이디입니다.", L"로그인 실패", MB_OK | MB_ICONERROR);
 			isRunning = false;
 		}
 		break;
@@ -361,7 +362,7 @@ int WINAPI WinMain(HINSTANCE hI, HINSTANCE hP, LPSTR lp, int nS) {
 	std::getline(std::cin, server_ip);
 	if (server_ip.empty()) server_ip = "127.0.0.1";
 
-	std::cout << "Enter username: ";
+	std::cout << "Enter Player ID: ";
 	std::getline(std::cin, g_username);
 	if (g_username.length() >= MAX_NAME_LEN) g_username = g_username.substr(0, MAX_NAME_LEN - 1);
 

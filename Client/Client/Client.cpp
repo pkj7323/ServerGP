@@ -77,7 +77,8 @@ void process_packet(char* ptr) {
 			std::cout << "Login successful. Message: " << p->message << "\n";
 		}
 		else {
-			std::cout << "Login failed. Message: " << p->message << "\n";
+			std::wstring str(p->message, p->message + strlen(p->message));
+			MessageBoxW(NULL, str.c_str(), L"로그인 실패", MB_OK | MB_ICONERROR);
 			isRunning = false;
 		}
 		break;
@@ -363,7 +364,7 @@ int WINAPI WinMain(HINSTANCE hI, HINSTANCE hP, LPSTR lp, int nS) {
 	std::getline(std::cin, server_ip);
 	if (server_ip.empty()) server_ip = "127.0.0.1";
 
-	std::cout << "Enter username: ";
+	std::cout << "Enter Player ID: ";
 	std::getline(std::cin, g_username);
 	if (g_username.length() >= MAX_NAME_LEN) g_username = g_username.substr(0, MAX_NAME_LEN - 1);
 
@@ -386,7 +387,7 @@ int WINAPI WinMain(HINSTANCE hI, HINSTANCE hP, LPSTR lp, int nS) {
 	C2S_Login login_pkt;
 	login_pkt.size = sizeof(login_pkt);
 	login_pkt.type = C2S_LOGIN;
-	strcpy_s(login_pkt.username, g_username.c_str());
+	strcpy_s(login_pkt.user_id, g_username.c_str());
 	send_packet(&login_pkt);
 
 	ShowWindow(hWnd, nS);

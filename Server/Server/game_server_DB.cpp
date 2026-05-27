@@ -72,24 +72,6 @@ std::atomic<int> npc_index = 20000;
 
 HANDLE h_iocp;
 SOCKET server_socket;
-
-using DBJobCallback = std::function<void()>;
-
-enum class DBTaskType : uint32_t {
-	DB_TASK_ERROR = 0,
-
-	LOGIN_AUTH = 1,             // 로그인 및 캐릭터 로드
-	SAVE_POSITION = 2,          // 플레이어 위치 저장
-};
-struct DBTask {
-	DBTaskType type;
-	int32_t session_id;     // 대상 세션 ID
-	DBJobCallback callback; // 워커 스레드에서 실행될 실제 함수
-
-	// [추가] DB 스레드로 넘길 임의의 데이터 (스냅샷 등)
-	std::any data;
-};
-
 enum class io_type
 {
 	send,
@@ -101,6 +83,30 @@ enum class io_type
 
 	count,
 };
+
+enum class DBTaskType : uint32_t {
+	DB_TASK_ERROR = 0,
+
+	LOGIN_AUTH = 1,             // 로그인 및 캐릭터 로드
+	SAVE_POSITION = 2,          // 플레이어 위치 저장
+};
+struct DBTask {
+	io_type ioType;           // IO 작업과 연관된 태스크인지 여부
+	DBTaskType type;
+	int32_t session_id;     // 대상 세션 ID
+
+	// [추가] DB 스레드로 넘길 임의의 데이터 (스냅샷 등)
+	std::any data;
+};
+
+concurrency::concurrent_queue<DBTask> db_task_queue;
+std::unordered_map<DBTaskType, std::function<void(DBTask&)>> DB_Task_handlers;
+
+SQLHENV henv = SQL_NULL_HENV;
+SQLHDBC hdbc = SQL_NULL_HDBC;
+
+
+
 
 
 class EXP_OVER {
@@ -315,7 +321,14 @@ enum class client_state
 	playing,
 	logout
 };
-
+struct player_data {
+	int16_t x;
+	int16_t y;
+	int id;
+	bool success;
+	char user_id[MAX_NAME_LEN];   // DB user_id (로그인 키)
+	char user_name[MAX_NAME_LEN]; // 표시 이름
+};
 class SESSION {
 public:
 	SOCKET			client_;
@@ -323,6 +336,7 @@ public:
 	EXP_OVER		recv_over_;
 	int				prev_recv_count_ = 0;
 	client_state	state_;
+	char			userId_[MAX_NAME_LEN] = {}; // DB user_id 보관
 
 	std::shared_ptr<Player> player_;
 
@@ -443,6 +457,15 @@ public:
 		strcpy_s(ack_packet.message, "Login successful.");
 		do_send(ack_packet.size, reinterpret_cast<char*>(&ack_packet));
 	}
+	void send_login_failure()
+	{
+		S2C_LoginResult ack_packet;
+		ack_packet.size = sizeof(S2C_LoginResult);
+		ack_packet.type = PACKET_TYPE::S2C_LOGIN_RESULT;
+		ack_packet.success = false;
+		strcpy_s(ack_packet.message, "Login failed. Invalid credentials.");
+		do_send(ack_packet.size, reinterpret_cast<char*>(&ack_packet));
+	}
 	void send_remove_player(int player_id)
 	{
 		S2C_RemovePlayer packet;
@@ -466,6 +489,7 @@ public:
 		return abs(x - player_->x_) <= VIEW_RANGE && abs(y - player_->y_) <= VIEW_RANGE;
 	}
 	void send_already_spawn_players();
+	
 };
 
 tbb::concurrent_unordered_map<int, std::atomic<std::shared_ptr<SESSION>>> clients;
@@ -616,12 +640,14 @@ bool SESSION::proccess_packet(unsigned char* buff)
 	case PACKET_TYPE::C2S_LOGIN:
 	{
 		C2S_Login* p = reinterpret_cast<C2S_Login*>(buff);
-		strncpy_s(player_->userName_, p->username, MAX_NAME_LEN);
-		state_ = client_state::playing;
-		sector.add_object(id_, player_->x_, player_->y_); // 섹터에 플레이어 추가
-		send_avatar_info();
-		send_already_spawn_players();
-		broadcast_new_player(id_);
+		std::string name = p->username;
+		std::string user_id = p->user_id;
+		state_ = client_state::connected;
+		DBTask login_task;
+		login_task.session_id = id_;
+		login_task.type = DBTaskType::LOGIN_AUTH;
+		login_task.data = std::make_any<std::string>(user_id);
+		db_task_queue.push(login_task);
 		break;
 	}
 	case PACKET_TYPE::C2S_MOVE:
@@ -790,7 +816,7 @@ void SESSION::send_add_player(int player_id)
 	add_packet.size = sizeof(S2C_AddPlayer);
 	add_packet.type = PACKET_TYPE::S2C_ADD_PLAYER;
 	add_packet.playerId = player_id;
-	strncpy_s(add_packet.username, session->player_->userName_, MAX_NAME_LEN);
+	strncpy_s(add_packet.username, session->userId_, MAX_NAME_LEN); // 닉네임 대신 ID 전송
 	add_packet.x = session->player_->x_;
 	add_packet.y = session->player_->y_;
 
@@ -893,6 +919,19 @@ void client_disconnect(int client_id)
 	std::shared_ptr<SESSION> cl = clients[client_id].load();
 	if (nullptr != cl && cl->player_) {
 		cl->state_ = client_state::logout;
+		
+		// DB 저장 태스크 큐에 푸시
+		DBTask task;
+		task.type = DBTaskType::SAVE_POSITION;
+		task.ioType = io_type::db_save_position; // 완료 후 처리가 필요하다면 사용, 아니면 메모리 해제용
+		task.session_id = client_id;
+		player_data pd;
+		pd.x = cl->player_->x_;
+		pd.y = cl->player_->y_;
+		strncpy_s(pd.user_id, sizeof(pd.user_id), cl->userId_, sizeof(pd.user_id) - 1);
+		task.data = std::make_any<player_data>(pd);
+		db_task_queue.push(task);
+
 		broadcast_player_remove_packet(cl->id_);
 		sector.remove_object(cl->id_, cl->player_->x_, cl->player_->y_);
 		closesocket(cl->client_);
@@ -1078,6 +1117,12 @@ void worker_thread()
 			if (cl) cl->flush_send();
 			break;
 		}
+		case io_type::db_save_position:
+		{
+			// 로그아웃 저장 완료 시 별도의 콜백 실행 없이 메모리만 해제
+			delete o;
+			break;
+		}
 		case io_type::npc_move:
 		{
 			delete o;
@@ -1108,13 +1153,37 @@ void worker_thread()
 		case io_type::db_player_auth:
 		{
 			auto new_session = clients[id].load();
-			o->task.callback();
-			
-		}
-		break;
-		case io_type::db_save_position:
-		{
-			o->task.callback();
+			if (new_session)
+			{
+				DBTask task = o->task;
+				if (task.data.type() == typeid(player_data))
+				{
+					player_data result = std::any_cast<player_data>(task.data);
+					if (result.success)
+					{
+						new_session->player_->x_ = result.x;
+						new_session->player_->y_ = result.y;
+						strncpy_s(new_session->userId_, sizeof(new_session->userId_), result.user_id, sizeof(new_session->userId_) - 1);
+						strncpy_s(new_session->player_->userName_, sizeof(new_session->player_->userName_), result.user_name, MAX_NAME_LEN);
+						sector.add_object(id, new_session->player_->x_, new_session->player_->y_); // 섹터에 플레이어 추가
+						new_session->send_avatar_info();
+						new_session->send_already_spawn_players();
+						broadcast_new_player(id);
+						new_session->state_ = client_state::playing;
+						std::cout << "Player[" << id << "] authenticated successfully. Position: (" << result.x << ", " << result.y << ")\n";
+					}
+					else
+					{
+						new_session->send_login_failure();
+					}
+				}
+				else
+				{
+					// DB 내부 오류로 인해 player_data가 덮어씌워지지 않은 경우 (초기 std::string 상태)
+					new_session->send_login_failure();
+				}
+			}
+			delete o; // DB 작업 완료 후 오버랩드 객체 삭제
 		}
 		break;
 		default:
@@ -1126,11 +1195,6 @@ void worker_thread()
 }
 
 
-concurrency::concurrent_queue<DBTask> db_task_queue;
-std::unordered_map<DBTaskType, std::function<void(const DBTask&)>> DB_Task_handlers;
-
-SQLHENV henv = SQL_NULL_HENV;
-SQLHDBC hdbc = SQL_NULL_HDBC;
 
 void DB_thread()
 {
@@ -1149,12 +1213,11 @@ void DB_thread()
 			}
 
 			// [2] 작업 완료 후 콜백을 PQCS로 워커스레드에서 뒷처리하기
-			if (task.callback) {
-				EXP_OVER* over = new EXP_OVER;
-				over->type = io_type::db_player_auth; // DB 작업 완료 콜백용 IO 타입
-				over->task = task; // 작업 정보도 확장 오버랩드에 담아서 전달
-				PostQueuedCompletionStatus(h_iocp, -1, task.session_id, &over->over);
-			}
+			EXP_OVER* over = new EXP_OVER;
+			over->type = task.ioType; // DB 작업 완료 콜백용 IO 타입
+			over->task = task; // 작업 정보도 확장 오버랩드에 담아서 전달
+			PostQueuedCompletionStatus(h_iocp, -1, task.session_id, &over->over);
+			
 		}
 		else {
 			// 작업이 없으면 짧게 휴식하여 CPU 점유율 방지
@@ -1163,33 +1226,141 @@ void DB_thread()
 	}
 }
 
-void Handle_LOGIN_AUTH(const DBTask& task)
+void Handle_LOGIN_AUTH(DBTask& task)
 {
-	int32_t user_id = std::any_cast<int32_t>(task.data);
+	task.ioType = io_type::db_player_auth; // DB 작업 완료 후 플레이어 인증 결과 처리용 IO 타입
+	std::string user_id = std::any_cast<std::string>(task.data);
+
+	SQLHSTMT check_hstmt = SQL_NULL_HSTMT;
+	SQLRETURN retcode = SQL_SUCCESS;
+	retcode = SQLAllocHandle(SQL_HANDLE_STMT, hdbc, &check_hstmt);
+	if (retcode != SQL_SUCCESS) {
+		DB_Error(check_hstmt, SQL_HANDLE_STMT, retcode);
+		return;
+	}
+
+	std::wstring query = L"EXEC check_auth '" + std::wstring(user_id.begin(), user_id.end()) + L"'";
+	retcode = SQLExecDirect(check_hstmt, (SQLWCHAR*)query.c_str(), SQL_NTS);
+	if (retcode != SQL_SUCCESS && retcode != SQL_SUCCESS_WITH_INFO)
+	{
+		DB_Error(check_hstmt, SQL_HANDLE_STMT, retcode);
+		return;
+	}
+
+	SQLINTEGER count = 0;
+	SQLLEN indicator;
+	retcode = SQLBindCol(check_hstmt, 1, SQL_C_LONG, &count, sizeof(SQLINTEGER), &indicator);
+	if (retcode != SQL_SUCCESS)
+	{
+		DB_Error(check_hstmt, SQL_HANDLE_STMT, retcode);
+		return;
+	}
+	
+	// [수정] 결과를 가져오려면 SQLFetch를 호출해야 합니다!
+	retcode = SQLFetch(check_hstmt);
+	if (retcode == SQL_ERROR)
+	{
+		DB_Error(check_hstmt, SQL_HANDLE_STMT, retcode);
+		return;
+	}
+
+	player_data result;
+	result.success = count > 0;
+
+	// [수정] 이전 쿼리의 커서(결과 셋)를 닫아야 같은 hstmt로 새 쿼리를 실행할 수 있습니다.
+	SQLCloseCursor(check_hstmt);
+	SQLFreeHandle(SQL_HANDLE_STMT, check_hstmt);
 
 	SQLHSTMT hstmt = SQL_NULL_HSTMT;
-	SQLRETURN retcode = SQL_SUCCESS;
 	retcode = SQLAllocHandle(SQL_HANDLE_STMT, hdbc, &hstmt);
 	if (retcode != SQL_SUCCESS) {
 		DB_Error(hstmt, SQL_HANDLE_STMT, retcode);
 		return;
 	}
-	std::wstring query = L"EXEC check_auth " + std::to_wstring(user_id);
+
+	query = L"EXEC select_user_data '" + std::wstring(user_id.begin(), user_id.end()) + L"'";
 	retcode = SQLExecDirect(hstmt, (SQLWCHAR*)query.c_str(), SQL_NTS);
-
-	int count = 0;
-	SQLLEN indicator;
-	retcode = SQLBindCol(hstmt, 1, SQL_C_LONG, &count, 10, &indicator);
-
-	task.data = std::make_any<int32_t>(count);
+	if (retcode != SQL_SUCCESS && retcode != SQL_SUCCESS_WITH_INFO)
+	{
+		DB_Error(hstmt, SQL_HANDLE_STMT, retcode);
+		return;
+	}
 	
+	if (result.success)
+	{
+		// SQLBindCol 없이 SQLFetch 먼저
+		retcode = SQLFetch(hstmt);
+		if (retcode == SQL_SUCCESS || retcode == SQL_SUCCESS_WITH_INFO)
+		{
+			SQLLEN ind;
+			char   tmp_uid [MAX_NAME_LEN + 1] = {};
+			char   tmp_name[MAX_NAME_LEN + 1] = {};
+			SQLINTEGER tmp_x = 0, tmp_y = 0;
+
+			SQLGetData(hstmt, 1, SQL_C_CHAR,  tmp_uid,  sizeof(tmp_uid),  &ind); // user_id
+			SQLGetData(hstmt, 2, SQL_C_CHAR,  tmp_name, sizeof(tmp_name), &ind); // user_name
+			SQLGetData(hstmt, 3, SQL_C_SLONG, &tmp_x,   sizeof(tmp_x),   &ind); // pos_x
+			SQLGetData(hstmt, 4, SQL_C_SLONG, &tmp_y,   sizeof(tmp_y),   &ind); // pos_y
+
+			// DB 타입이 nchar라서 들어간 후행 공백(padding) 제거
+			auto rtrim = [](char* str) {
+				int len = strnlen_s(str, MAX_NAME_LEN);
+				while (len > 0 && str[len - 1] == ' ') {
+					str[len - 1] = '\0';
+					len--;
+				}
+			};
+			rtrim(tmp_uid);
+			rtrim(tmp_name);
+
+			strncpy_s(result.user_id,   sizeof(result.user_id),   tmp_uid,  sizeof(result.user_id)   - 1);
+			strncpy_s(result.user_name, sizeof(result.user_name), tmp_name, sizeof(result.user_name) - 1);
+			result.x = static_cast<int16_t>(tmp_x);
+			result.y = static_cast<int16_t>(tmp_y);
+
+			std::cout << "[DB] user_id=" << result.user_id
+				<< " user_name=" << result.user_name
+				<< " x=" << result.x << " y=" << result.y << "\n";
+		}
+		else
+		{
+			DB_Error(hstmt, SQL_HANDLE_STMT, retcode);
+			return;
+		}
+	}
+
+	result.id = task.session_id;
+	task.data = std::make_any<player_data>(result);
+
+	SQLFreeHandle(SQL_HANDLE_STMT, hstmt);
 }
-void Handle_SAVE_POSITION(const DBTask& task)
+void Handle_SAVE_POSITION(DBTask& task)
 {
+	task.ioType = io_type::db_save_position; // DB 작업 완료 후 별도의 처리가 필요 없으므로 db_save_position으로 설정하여 워커스레드에서 메모리 해제만 하도록 함
+	player_data pd = std::any_cast<player_data>(task.data);
 
+	SQLHSTMT hstmt = SQL_NULL_HSTMT;
+	SQLRETURN retcode = SQLAllocHandle(SQL_HANDLE_STMT, hdbc, &hstmt);
+	if (retcode != SQL_SUCCESS) {
+		DB_Error(hstmt, SQL_HANDLE_STMT, retcode);
+		return;
+	}
+
+	std::string uid(pd.user_id);
+	std::wstring w_uid(uid.begin(), uid.end());
+	
+	std::wstring query = L"EXEC update_user_data '" + w_uid + L"', " + std::to_wstring(pd.x) + L", " + std::to_wstring(pd.y);
+
+	retcode = SQLExecDirect(hstmt, (SQLWCHAR*)query.c_str(), SQL_NTS);
+	if (retcode != SQL_SUCCESS && retcode != SQL_SUCCESS_WITH_INFO)
+	{
+		DB_Error(hstmt, SQL_HANDLE_STMT, retcode);
+	}
+
+	SQLFreeHandle(SQL_HANDLE_STMT, hstmt);
 }
 
-void RegisterDBHandler(DBTaskType type, std::function<void(const DBTask&)> handler)
+void RegisterDBHandler(DBTaskType type, std::function<void(DBTask&)> handler)
 {
 	DB_Task_handlers[type] = handler;
 }
@@ -1197,7 +1368,7 @@ void RegisterDBHandler(DBTaskType type, std::function<void(const DBTask&)> handl
 void DB_init()
 {
 	SQLRETURN retcode;
-	SQLHSTMT hstmt = 0;
+	
 	retcode = SQLAllocHandle(SQL_HANDLE_ENV, SQL_NULL_HANDLE, &henv);
 
 	// Set the ODBC version environment attribute  
@@ -1222,7 +1393,8 @@ void DB_init()
 				}
 				else
 				{
-					DB_Error(hstmt, SQL_HANDLE_STMT, retcode);
+					DB_Error(hdbc, SQL_HANDLE_DBC, retcode);
+					exit(-1);
 				}
 			}
 		}
@@ -1231,13 +1403,14 @@ void DB_init()
 	std::cout << "[DB] MSSQL 서버에 성공적으로 연결되었습니다." << std::endl;
 
 	// 2. 핸들러 등록 (DBTaskType과 실제 처리 함수 매핑)
-	RegisterDBHandler(DBTaskType::LOGIN_AUTH, [this](const DBTask& task) { Handle_LOGIN_AUTH(task); });
-	RegisterDBHandler(DBTaskType::SAVE_POSITION, [this](const DBTask& task) { Handle_SAVE_POSITION(task); });
+	RegisterDBHandler(DBTaskType::LOGIN_AUTH, [](DBTask& task) { Handle_LOGIN_AUTH(task); });
+	RegisterDBHandler(DBTaskType::SAVE_POSITION, [](DBTask& task) { Handle_SAVE_POSITION(task); });
 }
 
 int main()
 {
 	std::wcout.imbue(std::locale("korean"));
+	setlocale(LC_ALL, "korean");
 	srand(static_cast<unsigned int>(time(NULL)));
 	WSADATA WSAData;
 	WSAStartup(MAKEWORD(2, 2), &WSAData);
