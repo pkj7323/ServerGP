@@ -116,6 +116,7 @@ enum DIRECTION { UP, DOWN, LEFT, RIGHT };
 struct C2S_Login {
 	unsigned char size;
 	PACKET_TYPE   type;
+	char user_id[MAX_NAME_LEN];
 	char username[MAX_NAME_LEN];
 };
 
