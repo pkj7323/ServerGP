@@ -1,4 +1,4 @@
-﻿#include "pch.h"
+#include "pch.h"
 #include "RenderManager.h"
 #include "GameManager.h"
 
@@ -370,10 +370,34 @@ void RenderManager::Render(HWND hWnd)
 			graphics.DrawRectangle(&whitePen, invX, invY, invWidth, invHeight);
 			graphics.DrawString(L"[ INVENTORY ]", -1, &font, Gdiplus::PointF(static_cast<float>(invX + 150), static_cast<float>(invY + 10)), &whiteBrush);
 			
-			// Draw some dummy slots
+			// 장비 표시 텍스트 추가
+			graphics.DrawString(L"Eq:", -1, &font, Gdiplus::PointF(static_cast<float>(invX + 20), static_cast<float>(invY + 30)), &whiteBrush);
+
 			for(int r=0; r<4; ++r) {
 				for(int c=0; c<9; ++c) {
-					graphics.DrawRectangle(&whitePen, invX + 20 + c*40, invY + 50 + r*40, 30, 30);
+					int slotX = invX + 20 + c*40;
+					int slotY = invY + 50 + r*40;
+					graphics.DrawRectangle(&whitePen, slotX, slotY, 30, 30);
+					
+					// 장착 장비 렌더링
+					if (gm->players().contains(gm->my_id())) {
+						auto& my_player = gm->players()[gm->my_id()];
+						
+						if (r == 0 && c == 0) {
+							// 첫 번째 칸: 투구
+							if (my_player.armor_tier > 0 && my_player.armor_tier <= 4) {
+								Gdiplus::Image* helmet_img = _helmets[my_player.armor_tier];
+								if (helmet_img) graphics.DrawImage(helmet_img, slotX + 3, slotY + 3, 24, 24);
+							}
+						}
+						else if (r == 0 && c == 1) {
+							// 두 번째 칸: 무기
+							if (my_player.weapon_tier > 0 && my_player.weapon_tier <= 6) {
+								Gdiplus::Image* sword_img = _swords[my_player.weapon_tier];
+								if (sword_img) graphics.DrawImage(sword_img, slotX + 3, slotY + 3, 24, 24);
+							}
+						}
+					}
 				}
 			}
 		}

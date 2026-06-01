@@ -19,28 +19,6 @@
 #include <unordered_set>
 #include <valarray>
 
-// NPC 구현 첫번째 방법
-//  NPC클래스를 별도 제작, NPC컨테이너를 따로 생성한다.
-//  장점 : 깔끔하다, 군더더기가 없다.
-//  단점 : 플레이어와 NPC가 따로논다. 똑같은 역할을 수행하는 함수를 여러개씩 중복 작성해야 한다.
-//         예) bool can_see(int from, int to)
-//                 => bool can_see_p2p()
-//				    bool can_see_p2n()
-//					bool can_see_n2n()
-
-// NPC 구현 두번째 방법  <===== 실습에서 사용할 방법.
-//   clients 컨테이너에 NPC도 추가한다.
-//   장점 : 플레이어와 NPC를 동일하게 취급할 수 있어서, 프로그래밍 작성 부하가 줄어든다.
-//   단점 : 사용하지 않는 멤버들로 인한 메모리 낭비.
-
-// NPC 구현 세번째 방법  (실제로 많이 사용되는 방법)
-//   클래스 상속기능을 사용한다.
-//     SESSION은 NPC클래스를 상속받아서 네트워크 관련 기능을 추가한 형태로 정의한다.
-//       clients컨테이너를 objects컨테이너로 변경하고, 컨테이너는 NPC의 pointer를 저장한다.
-//      장점 : 메모리 낭비가 없다, 함수의 중복작성이 필요없다.
-//          (포인터로 관리되므로 player id의 중복사용 방지를 구현하기 쉬워진다 => Data Race 방지를 위한 추가 구현이 필요)
-//      단점 : 포인터가 사용되고, reinterpret_cast가 필요하다. (별로 단점이 아니다).
-
 class SESSION;
 enum NpcType : uint8_t {
 	NPC_NONE = 0, // 빈 값
@@ -84,6 +62,7 @@ enum class io_type
 	recv,
 	accept,
 	npc_move,
+	npc_respawn,
 	count,
 };
 
@@ -159,6 +138,7 @@ static bool is_player_id(int id)
 
 
 constexpr int EVENT_MOVE = -1;
+constexpr int EVENT_RESPAWN = -2;
 struct event_type {
 	int obj_id;
 	std::chrono::time_point<std::chrono::system_clock> wakeup_time;
@@ -492,14 +472,39 @@ public:
 	unsigned long long _exp      = 0;
 	int                _attack   = 0;
 public:
-	NPC() : BaseObject(), last_move_timestamp_(std::chrono::system_clock::now()) {}
-	std::chrono::time_point<std::chrono::system_clock> last_move_timestamp_; // NPC�� ������ �̵� �ð� ���
+	NPC() : BaseObject(), last_move_timestamp_(std::chrono::system_clock::now()), last_hit_time_(std::chrono::system_clock::now()) {}
+	std::chrono::time_point<std::chrono::system_clock> last_move_timestamp_; // NPC의 마지막 이동 시간 기록
+	std::chrono::time_point<std::chrono::system_clock> last_hit_time_;       // 마지막 피격 시간
+	int16_t initial_x_ = 0;
+	int16_t initial_y_ = 0;
 	void heartbeat()
 	{
 		do_random_move();
 	}
 	bool do_timer_move()
 	{
+		auto now = std::chrono::system_clock::now();
+		if (_hp < _maxHp && std::chrono::duration_cast<std::chrono::seconds>(now - last_hit_time_).count() >= 5) {
+			_hp += _maxHp / 10;
+			if (_hp > _maxHp) _hp = _maxHp;
+			
+			S2C_ChatMessage chat_pkt;
+			chat_pkt.size = sizeof(chat_pkt);
+			chat_pkt.type = S2C_CHAT_MESSAGE;
+			chat_pkt.object_id = id_;
+			std::string msg = "회복! 체력: " + std::to_string(_hp);
+			strncpy_s(chat_pkt.message, msg.c_str(), sizeof(chat_pkt.message));
+			
+			for (auto pid : sector.get_objects_nearby_sector(x_, y_)) {
+				if (!is_npc_id(pid)) {
+					std::shared_ptr<SESSION> s = clients[pid].load();
+					if (s && s->state_ == client_state::playing) {
+						s->do_send(chat_pkt.size, reinterpret_cast<char*>(&chat_pkt));
+					}
+				}
+			}
+		}
+
 		bool has_player_nearby = do_random_move();
 		if (id_ == make_npc_id(20000))
 		{
@@ -869,7 +874,26 @@ bool SESSION::proccess_packet(unsigned char* buff)
 					}
 				}
 				if (hit) {
-					npc->_hp -= damage;
+					npc->last_hit_time_ = std::chrono::system_clock::now();
+					int actual_damage = damage * 20; // 테스트를 위해 데미지 20배 뻥튀기!
+					npc->_hp -= actual_damage;
+					
+					// 데미지 입었음을 채팅(말풍선)으로 출력
+					S2C_ChatMessage chat_pkt;
+					chat_pkt.size = sizeof(chat_pkt);
+					chat_pkt.type = S2C_CHAT_MESSAGE;
+					chat_pkt.object_id = oid;
+					std::string msg = "앗! 체력: " + std::to_string(npc->_hp);
+					strncpy_s(chat_pkt.message, msg.c_str(), sizeof(chat_pkt.message));
+					
+					do_send(chat_pkt.size, reinterpret_cast<char*>(&chat_pkt));
+					for (auto& pid : view_copy) {
+						std::shared_ptr<SESSION> s = clients[pid].load();
+						if (s && s->state_ == client_state::playing) {
+							s->do_send(chat_pkt.size, reinterpret_cast<char*>(&chat_pkt));
+						}
+					}
+
 					if (npc->_hp <= 0) {
 						// Death
 						npc->is_active = false;
@@ -892,6 +916,14 @@ bool SESSION::proccess_packet(unsigned char* buff)
 							}
 						}
 						sector.remove_object(oid, npc->x_, npc->y_);
+
+						// 리스폰 이벤트 등록 (5초 뒤)
+						event_type ev;
+						ev.obj_id = oid;
+						ev.wakeup_time = std::chrono::system_clock::now() + std::chrono::seconds(5);
+						ev.event_id = EVENT_RESPAWN;
+						ev.target_id = -1;
+						timer_queue.push(ev);
 					}
 				}
 			}
@@ -1064,9 +1096,6 @@ void SESSION::send_already_spawn_players()
 	}
 }
 
-
-
-
 void broadcast_new_player(int new_player_id)
 {
 	auto new_player_session = clients[new_player_id].load();
@@ -1162,6 +1191,8 @@ void npc_initialize()
 		npc->id_       = npc_id;
 		npc->x_        = entry.x;
 		npc->y_        = entry.y;
+		npc->initial_x_= entry.x;
+		npc->initial_y_= entry.y;
 		npc->_npcType  = static_cast<NpcType>(entry.type_id);
 		npc->_visualId = m.visual_id;
 		npc->_hp       = m.hp;
@@ -1210,6 +1241,13 @@ void timer_thread()
 					EXP_OVER* move_over = new EXP_OVER;
 					move_over->type = io_type::npc_move;
 					PostQueuedCompletionStatus(h_iocp, -1, top_ev.obj_id, &move_over->over);
+				}
+				break;
+				case EVENT_RESPAWN:
+				{
+					EXP_OVER* respawn_over = new EXP_OVER;
+					respawn_over->type = io_type::npc_respawn;
+					PostQueuedCompletionStatus(h_iocp, -1, top_ev.obj_id, &respawn_over->over);
 				}
 				break;
 				default:
@@ -1373,6 +1411,39 @@ void worker_thread()
 				}
 			}
 
+			break;
+		}
+		case io_type::npc_respawn:
+		{
+			delete o;
+			if (is_npc_id(id)) {
+				auto npc = npcs[id].load();
+				if (npc) {
+					npc->x_ = npc->initial_x_;
+					npc->y_ = npc->initial_y_;
+					npc->_hp = npc->_maxHp;
+					sector.add_object(npc->id_, npc->x_, npc->y_);
+					npc->wake_up(); // 주변 플레이어 감지 및 이동 타이머 시작
+					
+					// 리스폰 확인용 로그 및 채팅 브로드캐스트
+					std::cout << "[Respawn] NPC ID: " << npc->id_ << " respawned at (" << npc->x_ << ", " << npc->y_ << ")\n";
+
+					S2C_ChatMessage chat_pkt;
+					chat_pkt.size = sizeof(chat_pkt);
+					chat_pkt.type = S2C_CHAT_MESSAGE;
+					chat_pkt.object_id = npc->id_;
+					strncpy_s(chat_pkt.message, "부활했습니다!", sizeof(chat_pkt.message));
+					
+					for (auto pid : sector.get_objects_nearby_sector(npc->x_, npc->y_)) {
+						if (!is_npc_id(pid)) {
+							std::shared_ptr<SESSION> s = clients[pid].load();
+							if (s && s->state_ == client_state::playing) {
+								s->do_send(chat_pkt.size, reinterpret_cast<char*>(&chat_pkt));
+							}
+						}
+					}
+				}
+			}
 			break;
 		}
 		default:
