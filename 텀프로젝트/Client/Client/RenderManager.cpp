@@ -24,6 +24,10 @@ RenderManager::~RenderManager()
 	for (int i = 1; i <= 5; ++i) {
 		if (_mob_heads[i]) { delete _mob_heads[i]; _mob_heads[i] = nullptr; }
 	}
+	if (_gold_icon) { delete _gold_icon; _gold_icon = nullptr; }
+	for (int i = 0; i < 20; ++i) {
+		if (_item_images[i]) { delete _item_images[i]; _item_images[i] = nullptr; }
+	}
 }
 
 void RenderManager::Release()
@@ -47,6 +51,10 @@ void RenderManager::Release()
 	if (_player_head) { delete _player_head; _player_head = nullptr; }
 	for (int i = 1; i <= 5; ++i) {
 		if (_mob_heads[i]) { delete _mob_heads[i]; _mob_heads[i] = nullptr; }
+	}
+	if (_gold_icon) { delete _gold_icon; _gold_icon = nullptr; }
+	for (int i = 0; i < 20; ++i) {
+		if (_item_images[i]) { delete _item_images[i]; _item_images[i] = nullptr; }
 	}
 }
 
@@ -390,35 +398,67 @@ void RenderManager::Render(HWND hWnd)
 			graphics.DrawRectangle(&whitePen, invX, invY, invWidth, invHeight);
 			graphics.DrawString(L"[ INVENTORY ]", -1, &font, Gdiplus::PointF(static_cast<float>(invX + 150), static_cast<float>(invY + 10)), &whiteBrush);
 			
-			// 장비 표시 텍스트 추가
-			graphics.DrawString(L"Eq:", -1, &font, Gdiplus::PointF(static_cast<float>(invX + 20), static_cast<float>(invY + 30)), &whiteBrush);
+			// --- Draw Gold (Top-Left) ---
+			if (_gold_icon) {
+				graphics.DrawImage(_gold_icon, invX + 20, invY + 10, 24, 24);
+			}
+			std::wstring goldStr = std::to_wstring(gm->my_gold());
+			graphics.DrawString(goldStr.c_str(), -1, &font, Gdiplus::PointF(static_cast<float>(invX + 50), static_cast<float>(invY + 14)), &whiteBrush);
 
-			for(int r=0; r<4; ++r) {
-				for(int c=0; c<9; ++c) {
-					int slotX = invX + 20 + c*40;
-					int slotY = invY + 50 + r*40;
-					graphics.DrawRectangle(&whitePen, slotX, slotY, 30, 30);
-					
-					// 장착 장비 렌더링
-					if (gm->players().contains(gm->my_id())) {
-						auto& my_player = gm->players()[gm->my_id()];
-						
-						if (r == 0 && c == 0) {
-							// 첫 번째 칸: 투구
-							if (my_player.armor_tier > 0 && my_player.armor_tier <= 4) {
-								Gdiplus::Image* helmet_img = _helmets[my_player.armor_tier];
-								if (helmet_img) graphics.DrawImage(helmet_img, slotX + 3, slotY + 3, 24, 24);
-							}
-						}
-						else if (r == 0 && c == 1) {
-							// 두 번째 칸: 무기
-							if (my_player.weapon_tier > 0 && my_player.weapon_tier <= 6) {
-								Gdiplus::Image* sword_img = _swords[my_player.weapon_tier];
-								if (sword_img) graphics.DrawImage(sword_img, slotX + 3, slotY + 3, 24, 24);
-							}
-						}
-					}
+			// --- Draw Eq text ---
+			graphics.DrawString(L"Eq:", -1, &font, Gdiplus::PointF(static_cast<float>(invX + 20), static_cast<float>(invY + 45)), &whiteBrush);
+
+			// Equipment Slot Rendering
+			int eqSlotX_helm = invX + 50;
+			int eqSlotY = invY + 40;
+			int eqSlotX_sword = invX + 90;
+			graphics.DrawRectangle(&whitePen, eqSlotX_helm, eqSlotY, 30, 30);
+			graphics.DrawRectangle(&whitePen, eqSlotX_sword, eqSlotY, 30, 30);
+
+			if (gm->players().contains(gm->my_id())) {
+				auto& my_player = gm->players()[gm->my_id()];
+				if (my_player.armor_tier > 0 && my_player.armor_tier <= 4) {
+					Gdiplus::Image* helmet_img = _helmets[my_player.armor_tier];
+					if (helmet_img) graphics.DrawImage(helmet_img, eqSlotX_helm + 3, eqSlotY + 3, 24, 24);
 				}
+				if (my_player.weapon_tier > 0 && my_player.weapon_tier <= 6) {
+					Gdiplus::Image* sword_img = _swords[my_player.weapon_tier];
+					if (sword_img) graphics.DrawImage(sword_img, eqSlotX_sword + 3, eqSlotY + 3, 24, 24);
+				}
+			}
+
+			// --- Draw List-Based Inventory Items ---
+			int item_idx = 0;
+			for (const auto& [item_id, count] : gm->my_inventory()) {
+				if (count <= 0 || item_id <= 0 || item_id >= 20) continue;
+
+				int r = item_idx / 9;
+				int c = item_idx % 9;
+				int slotX = invX + 20 + c * 40;
+				int slotY = invY + 80 + r * 40;
+				
+				graphics.DrawRectangle(&whitePen, slotX, slotY, 30, 30);
+				
+				Gdiplus::Image* img = _item_images[item_id];
+				if (img) {
+					graphics.DrawImage(img, slotX + 3, slotY + 3, 24, 24);
+				}
+
+				// Draw count at bottom-right
+				Gdiplus::Font smallFont(&fontFamily, 10, Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
+				std::wstring countStr = std::to_wstring(count);
+				graphics.DrawString(countStr.c_str(), -1, &smallFont, Gdiplus::PointF(static_cast<float>(slotX + 16), static_cast<float>(slotY + 16)), &whiteBrush);
+				
+				item_idx++;
+			}
+			
+			// Draw remaining empty slots just for aesthetics
+			for (; item_idx < 36; ++item_idx) {
+				int r = item_idx / 9;
+				int c = item_idx % 9;
+				int slotX = invX + 20 + c * 40;
+				int slotY = invY + 80 + r * 40;
+				graphics.DrawRectangle(&whitePen, slotX, slotY, 30, 30);
 			}
 		}
 	}

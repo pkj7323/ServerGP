@@ -34,6 +34,8 @@ struct NpcMeta {
 	unsigned long long exp       = 0;
 	int                attack    = 0;
 	int                visual_id = 0;
+	int                drop_item = 0;
+	int                drop_gold = 0;
 };
 
 // ── 스폰 엔트리 (map_spawn.bin 스캔 결과) ─────────────────────────────────────
@@ -98,6 +100,8 @@ inline std::array<NpcMeta, 6> load_npc_config_lua(const char* lua_path)
 		m.exp       = static_cast<unsigned long long>(read_int("exp"));
 		m.attack    = read_int("attack");
 		m.visual_id = read_int("visual_id");
+		m.drop_item = read_int("drop_item");
+		m.drop_gold = read_int("drop_gold");
 
 		std::cout << "[NpcLoader] Type[" << type_id << "] "
 				  << m.name << "  HP=" << m.hp

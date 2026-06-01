@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include "Singleton.h"
 #include "Object.h"
@@ -65,6 +65,11 @@ public:
 	bool show_inventory() const { return _showInventory; }
 	void toggle_inventory() { _showInventory = !_showInventory; }
 
+	int my_gold() const { return _myGold; }
+	void set_my_gold(int g) { _myGold = g; }
+
+	std::unordered_map<int, int>& my_inventory() { return _myInventory; }
+
 	std::vector<AttackEffect>& attack_effects() { return _attackEffects; }
 
 private:
@@ -73,6 +78,8 @@ private:
 	bool _isChatting = false;
 	std::wstring _currentChatInput = L"";
 	bool _showInventory = false;
+	int _myGold = 0;
+	std::unordered_map<int, int> _myInventory;
 	std::unordered_map<int, Object> _players;
 	std::unordered_map<int, Object> _npcs;
 	int _myId;

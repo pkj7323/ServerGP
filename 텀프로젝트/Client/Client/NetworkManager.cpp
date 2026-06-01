@@ -1,4 +1,4 @@
-#include "pch.h"
+﻿#include "pch.h"
 #include "NetworkManager.h"
 
 #include "common.h"
@@ -165,7 +165,7 @@ void NetworkManager::process_packet(char* ptr)
 	case S2C_CHAT_MESSAGE: {
 		S2C_ChatMessage* p = reinterpret_cast<S2C_ChatMessage*>(ptr);
 		std::wstring sender = L"Unknown";
-		
+
 		std::string msg_str = p->message;
 		int wlen = MultiByteToWideChar(CP_ACP, 0, msg_str.c_str(), -1, NULL, 0);
 		std::wstring wmsg(wlen, 0);
@@ -182,7 +182,8 @@ void NetworkManager::process_packet(char* ptr)
 
 			gm->npcs()[p->object_id].chat_msg = wmsg;
 			gm->npcs()[p->object_id].chat_time = std::chrono::steady_clock::now();
-		} else if (gm->players().contains(p->object_id)) {
+		}
+		else if (gm->players().contains(p->object_id)) {
 			std::string s_name = gm->players()[p->object_id].name;
 			int n_len = MultiByteToWideChar(CP_ACP, 0, s_name.c_str(), -1, NULL, 0);
 			sender.assign(n_len, 0);
@@ -192,7 +193,7 @@ void NetworkManager::process_packet(char* ptr)
 			gm->players()[p->object_id].chat_msg = wmsg;
 			gm->players()[p->object_id].chat_time = std::chrono::steady_clock::now();
 		}
-		
+
 		std::wstring logMsg = L"[" + sender + L"] " + wmsg;
 		gm->add_chat_log(logMsg);
 		break;
@@ -224,6 +225,17 @@ void NetworkManager::process_packet(char* ptr)
 			gm->npcs()[p->object_id].armor_tier = p->armor_tier;
 			gm->npcs()[p->object_id].weapon_tier = p->weapon_tier;
 		}
+		break;
+	}
+	case S2C_INVENTORY_SYNC:
+	{
+		S2C_InventorySync* p = reinterpret_cast<S2C_InventorySync*>(ptr);
+		gm->set_my_gold(p->gold);
+		gm->my_inventory().clear();
+		for (int i = 0; i < p->item_count; ++i) {
+			gm->my_inventory()[p->items[i].item_id] = p->items[i].count;
+		}
+		std::cout << "Inventory Sync: Gold=" << p->gold << " Items=" << p->item_count << "\n";
 		break;
 	}
 	default:

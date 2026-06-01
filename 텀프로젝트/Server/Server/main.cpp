@@ -268,11 +268,14 @@ public:
 	short _dir_y = -1;
 
 	// Inventory
-	int _rotten_flesh = 0;
-	int _bone = 0;
 	int _gold = 0;
+	std::unordered_map<int, int> inventory; // item_id -> count
 
 	Player() : BaseObject() {}
+
+	void add_item(int item_id, int count) {
+		inventory[item_id] += count;
+	}
 
 	char get_armor_tier() const {
 		if (_armor >= g_armor_config.netherite) return 4;
@@ -422,6 +425,24 @@ public:
 		do_send(sizeof(S2C_AvatarInfo), reinterpret_cast<char*>(&info_packet));
 	}
 
+	void send_inventory_sync()
+	{
+		S2C_InventorySync pkt;
+		pkt.size = sizeof(S2C_InventorySync);
+		pkt.type = PACKET_TYPE::S2C_INVENTORY_SYNC;
+		pkt.gold = player_->_gold;
+		
+		int count = 0;
+		for (auto& [item_id, amt] : player_->inventory) {
+			if (amt > 0 && count < MAX_INVENTORY_SLOTS) {
+				pkt.items[count].item_id = item_id;
+				pkt.items[count].count = amt;
+				count++;
+			}
+		}
+		pkt.item_count = count;
+		do_send(sizeof(S2C_InventorySync), reinterpret_cast<char*>(&pkt));
+	}
 
 	void send_login_success()
 	{
@@ -471,6 +492,8 @@ public:
 	unsigned char      _level    = 1;
 	unsigned long long _exp      = 0;
 	int                _attack   = 0;
+	int                _dropItem = 0;
+	int                _dropGold = 0;
 public:
 	NPC() : BaseObject(), last_move_timestamp_(std::chrono::system_clock::now()), last_hit_time_(std::chrono::system_clock::now()) {}
 	std::chrono::time_point<std::chrono::system_clock> last_move_timestamp_; // NPC의 마지막 이동 시간 기록
@@ -824,18 +847,18 @@ bool SESSION::proccess_packet(unsigned char* buff)
 			int sign = dx > 0 ? 1 : -1;
 			for (int r = 1; r <= range; ++r) {
 				for (int w = -width; w <= width; ++w) {
-					attack_cells.push_back({player_->x_ + sign * r, player_->y_ + w});
+					attack_cells.emplace_back(player_->x_ + sign * r, player_->y_ + w);
 				}
 			}
 		} else if (dy != 0) {
 			int sign = dy > 0 ? 1 : -1;
 			for (int r = 1; r <= range; ++r) {
 				for (int w = -width; w <= width; ++w) {
-					attack_cells.push_back({player_->x_ + w, player_->y_ + sign * r});
+					attack_cells.emplace_back(player_->x_ + w, player_->y_ + sign * r);
 				}
 			}
 		} else {
-			attack_cells.push_back({player_->x_, player_->y_ - 1});
+			attack_cells.emplace_back(player_->x_, player_->y_ - 1);
 		}
 
 		// Broadcast attack effect
@@ -899,9 +922,15 @@ bool SESSION::proccess_packet(unsigned char* buff)
 						npc->is_active = false;
 						
 						// Reward
-						if (rand() % 2 == 0) player_->_rotten_flesh++;
-						else player_->_bone++;
-						player_->_gold += (rand() % 5 + 1);
+						if (npc->_dropItem > 0) {
+							player_->add_item(npc->_dropItem, 1);
+						}
+						if (npc->_dropGold > 0) {
+							player_->_gold += (rand() % npc->_dropGold + 1);
+						}
+						
+						// Send inventory sync
+						send_inventory_sync();
 
 						// Broadcast remove
 						S2C_RemoveObject rm_pkt;
@@ -1197,9 +1226,12 @@ void npc_initialize()
 		npc->_visualId = m.visual_id;
 		npc->_hp       = m.hp;
 		npc->_maxHp    = m.max_hp;
+		npc->_visualId = m.visual_id;
 		npc->_level    = static_cast<unsigned char>(m.level);
 		npc->_exp      = m.exp;
 		npc->_attack   = m.attack;
+		npc->_dropItem = m.drop_item;
+		npc->_dropGold = m.drop_gold;
 		strncpy_s(npc->userName_, m.name.c_str(), sizeof(npc->userName_) - 1);
 
 		npcs[npc_id] = npc;

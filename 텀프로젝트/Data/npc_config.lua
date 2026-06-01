@@ -1,4 +1,4 @@
-﻿-- =============================================================================
+-- =============================================================================
 -- npc_config.lua
 -- 서버 초기화 시 로드. map_spawn.bin의 NPC 타입 ID(1~5)에 대응하는
 -- 메타데이터(이름, HP, 레벨, 경험치, 공격력, 시각 ID)를 정의합니다.
@@ -22,44 +22,54 @@ NPC_TYPES = {
     --   visual_id : S2C_AddObject.visual_id (클라이언트 렌더링용)
 
     [1] = {
-        name      = "Zombie",
-        hp        = 100,
-        level     = 3,
-        exp       = 20,
-        attack    = 10,
-        visual_id = 1,
+        name       = "Zombie",
+        hp         = 100,
+        level      = 3,
+        exp        = 20,
+        attack     = 10,
+        visual_id  = 1,
+        drop_item  = 1, -- Rotten Flesh
+        drop_gold  = 5,
     },
     [2] = {
-        name      = "Skeleton",
-        hp        = 80,
-        level     = 5,
-        exp       = 40,
-        attack    = 15,
-        visual_id = 2,
+        name       = "Skeleton",
+        hp         = 80,
+        level      = 5,
+        exp        = 40,
+        attack     = 15,
+        visual_id  = 2,
+        drop_item  = 2, -- Bone
+        drop_gold  = 5,
     },
     [3] = {
-        name      = "Creeper",
-        hp        = 60,
-        level     = 7,
-        exp       = 60,
-        attack    = 40,   -- 폭발 데미지
-        visual_id = 3,
+        name       = "Creeper",
+        hp         = 60,
+        level      = 7,
+        exp        = 60,
+        attack     = 40,   -- 폭발 데미지
+        visual_id  = 3,
+        drop_item  = 3, -- Gunpowder
+        drop_gold  = 5,
     },
     [4] = {
-        name      = "Enderman",
-        hp        = 300,
-        level     = 15,
-        exp       = 300,
-        attack    = 30,
-        visual_id = 4,
+        name       = "Enderman",
+        hp         = 300,
+        level      = 15,
+        exp        = 300,
+        attack     = 30,
+        visual_id  = 4,
+        drop_item  = 6, -- Diamond
+        drop_gold  = 20,
     },
     [5] = {
-        name      = "Iron Golem",
-        hp        = 500,
-        level     = 10,
-        exp       = 200,
-        attack    = 50,
-        visual_id = 5,
+        name       = "Iron Golem",
+        hp         = 500,
+        level      = 10,
+        exp        = 200,
+        attack     = 50,
+        visual_id  = 5,
+        drop_item  = 4, -- Iron Ingot
+        drop_gold  = 20,
     },
 }
 

@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 constexpr short PORT = 3500;
 constexpr int WORLD_WIDTH = 2000;

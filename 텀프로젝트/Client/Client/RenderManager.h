@@ -30,6 +30,15 @@ public:
 		_mob_heads[3] = new Gdiplus::Image(L"Resource/creeper_head.png");
 		_mob_heads[4] = new Gdiplus::Image(L"Resource/enderman_head.png");
 		_mob_heads[5] = new Gdiplus::Image(L"Resource/iron_golem_head.png");
+
+		_gold_icon = new Gdiplus::Image(L"Resource/gold_nugget.png");
+		for (int i = 0; i < 20; ++i) _item_images[i] = nullptr;
+		_item_images[1] = new Gdiplus::Image(L"Resource/rotten_flesh.png");
+		_item_images[2] = new Gdiplus::Image(L"Resource/bone.png");
+		_item_images[3] = new Gdiplus::Image(L"Resource/gunpowder.png");
+		_item_images[4] = new Gdiplus::Image(L"Resource/iron_ingot.png");
+		_item_images[5] = new Gdiplus::Image(L"Resource/gold_ingot.png");
+		_item_images[6] = new Gdiplus::Image(L"Resource/diamond.png");
 	}
 	~RenderManager();
 	void Release() override;
@@ -44,4 +53,7 @@ private:
 	Gdiplus::Image* _swords[7];
 	Gdiplus::Image* _player_head;
 	Gdiplus::Image* _mob_heads[6];
+
+	Gdiplus::Image* _gold_icon;
+	Gdiplus::Image* _item_images[20];
 };
