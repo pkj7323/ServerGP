@@ -1,9 +1,17 @@
-#pragma once
+﻿#pragma once
 
 #include "Singleton.h"
 #include "Object.h"
 #include <unordered_map>
 #include <string>
+#include <vector>
+
+struct AttackEffect {
+	int id;
+	char tier;
+	short x, y, dx, dy;
+	std::chrono::time_point<std::chrono::steady_clock> start_time;
+};
 
 class GameManager : public Singleton<GameManager>
 {
@@ -57,7 +65,10 @@ public:
 	bool show_inventory() const { return _showInventory; }
 	void toggle_inventory() { _showInventory = !_showInventory; }
 
+	std::vector<AttackEffect>& attack_effects() { return _attackEffects; }
+
 private:
+	std::vector<AttackEffect> _attackEffects;
 	std::vector<std::wstring> _chatLogs;
 	bool _isChatting = false;
 	std::wstring _currentChatInput = L"";

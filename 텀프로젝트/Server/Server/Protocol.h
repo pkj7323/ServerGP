@@ -23,6 +23,7 @@ enum PACKET_TYPE {
 						// 텔레포트 요청 패킷 (목적지 좌표 포함)
 						// STRESS TEST용으로 추가한 패킷입니다. 시작 마을에 몰리는 것을 방지.
 	C2S_LOGOUT,			// Client to Server: Logout request
+	C2S_TEST_WEAPON,
 
 	S2C_LOGIN_RESULT,	//	Server to Client: Login result
 						// 로그인 결과 패킷 (성공 여부와 메시지 포함)
@@ -32,6 +33,7 @@ enum PACKET_TYPE {
 	S2C_MOVE_OBJECT,	//	Server to Client: Move player or NPC
 	S2C_CHAT_MESSAGE,	//	Server to Client: Chat message
 	S2C_STATUS_CHANGE,	//	Server to Client: Update player or NPC status (e.g., health, buffs)	
+	S2C_ATTACK_EFFECT,	//	Server to Client: Show attack animation/range
 };
 
 #pragma pack(push, 1) // Ensure no padding between struct members
@@ -72,6 +74,12 @@ struct C2S_Logout {
 	PACKET_TYPE   type;
 };
 
+struct C2S_TestWeapon {
+	unsigned char size;
+	PACKET_TYPE   type;
+	char weapon_tier;
+};
+
 struct S2C_LoginResult {
 	unsigned char size;
 	PACKET_TYPE   type;
@@ -91,6 +99,9 @@ struct S2C_AvatarInfo {
 	unsigned long long exp;
 	unsigned char level;
 	char armor_tier; // 0: None, 1: Copper, 2: Iron, 3: Diamond, 4: Netherite
+	char weapon_tier; // 0: None, 1: Wood, 2: Gold, 3: Copper, 4: Iron, 5: Diamond, 6: Netherite
+	short dir_x;
+	short dir_y;
 };
 
 struct S2C_AddObject {
@@ -106,6 +117,9 @@ struct S2C_AddObject {
 	unsigned long long exp;
 	unsigned char level;
 	char armor_tier; // 0: None, 1: Copper, 2: Iron, 3: Diamond, 4: Netherite
+	char weapon_tier;
+	short dir_x;
+	short dir_y;
 };
 
 struct S2C_RemoveObject {
@@ -120,6 +134,8 @@ struct S2C_MoveObject {
 	int object_id;
 	short x; // 나는 방향으로 해석
 	short y;
+	short dir_x;
+	short dir_y;
 	int move_time; // in milliseconds
 };
 
@@ -139,6 +155,18 @@ struct S2C_StatusChange {
 	unsigned long long exp;
 	unsigned char level;
 	char armor_tier; // 0: None, 1: Copper, 2: Iron, 3: Diamond, 4: Netherite
+	char weapon_tier;
+};
+
+struct S2C_AttackEffect {
+	unsigned char size;
+	PACKET_TYPE   type;
+	int object_id; // Who attacked
+	char weapon_tier;
+	short x; // Attacker's x
+	short y; // Attacker's y
+	short dir_x;
+	short dir_y;
 };
 
 #pragma pack(pop) // Restore default packing

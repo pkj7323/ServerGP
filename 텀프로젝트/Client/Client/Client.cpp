@@ -1,4 +1,4 @@
-#include "pch.h"
+﻿#include "pch.h"
 #include "GameManager.h"
 #include "NetworkManager.h"
 #include "RenderManager.h"
@@ -56,8 +56,19 @@ LRESULT CALLBACK window_proc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lPar
 			gm->toggle_inventory();
 			return 0;
 		}
+		if (wParam >= '1' && wParam <= '6') {
+			C2S_TestWeapon p;
+			p.size = sizeof(p);
+			p.type = C2S_TEST_WEAPON;
+			p.weapon_tier = static_cast<char>(wParam - '0');
+			NetworkManager::Instance()->send_packet(&p);
+			return 0;
+		}
 		if (wParam == VK_SPACE) {
-			// Interact / Next dialogue (placeholder for later)
+			C2S_Attack p;
+			p.size = sizeof(p);
+			p.type = C2S_ATTACK;
+			NetworkManager::Instance()->send_packet(&p);
 			return 0;
 		}
 

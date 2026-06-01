@@ -283,6 +283,14 @@ public:
 class Player : public BaseObject {
 public:
 	int _armor = 0;
+	char _weapon_tier = 1;
+	short _dir_x = 0;
+	short _dir_y = -1;
+
+	// Inventory
+	int _rotten_flesh = 0;
+	int _bone = 0;
+	int _gold = 0;
 
 	Player() : BaseObject() {}
 
@@ -424,6 +432,13 @@ public:
 		info_packet.x = player_->x_;
 		info_packet.y = player_->y_;
 		info_packet.armor_tier = player_->get_armor_tier();
+		info_packet.weapon_tier = player_->_weapon_tier;
+		info_packet.dir_x = player_->_dir_x;
+		info_packet.dir_y = player_->_dir_y;
+		info_packet.hp = 100;
+		info_packet.max_hp = 100;
+		info_packet.exp = 0;
+		info_packet.level = 1;
 		do_send(sizeof(S2C_AvatarInfo), reinterpret_cast<char*>(&info_packet));
 	}
 
@@ -662,6 +677,12 @@ bool SESSION::proccess_packet(unsigned char* buff)
 		int16_t old_y = player_->y_;
 		int16_t new_x = player_->x_ + dx;
 		int16_t new_y = player_->y_ + dy;
+		
+		if (dx != 0 || dy != 0) {
+			player_->_dir_x = dx;
+			player_->_dir_y = dy;
+		}
+
 		if (new_x >= 0 && new_x < WORLD_WIDTH)
 		{
 			player_->x_ = new_x;
@@ -721,6 +742,9 @@ bool SESSION::proccess_packet(unsigned char* buff)
 					add_pkt.exp       = npc->_exp;
 					add_pkt.level     = npc->_level;
 					add_pkt.armor_tier = 0; // NPCs don't have armor tier
+					add_pkt.weapon_tier = 0;
+					add_pkt.dir_x = 0;
+					add_pkt.dir_y = -1;
 					do_send(add_pkt.size, reinterpret_cast<char*>(&add_pkt));
 
 					npc->wake_up();
@@ -770,6 +794,109 @@ bool SESSION::proccess_packet(unsigned char* buff)
 			}
 		}
 		break;
+		break;
+	}
+	case PACKET_TYPE::C2S_ATTACK:
+	{
+		int range = 1;
+		int width = 0;
+		int damage = player_->_weapon_tier;
+		switch(player_->_weapon_tier) {
+		case 1: range = 1; width = 0; break; // Wood: 1
+		case 2: range = 1; width = 1; break; // Gold: 1x3
+		case 3: range = 2; width = 1; break; // Copper: 2x3
+		case 4: range = 3; width = 1; break; // Iron: 3x3
+		case 5: range = 3; width = 1; break; // Diamond: 3x3
+		case 6: range = 3; width = 2; break; // Netherite: 3x5
+		default: range = 1; width = 0; break;
+		}
+
+		std::vector<std::pair<int, int>> attack_cells;
+		short dx = player_->_dir_x;
+		short dy = player_->_dir_y;
+		
+		if (dx != 0) {
+			int sign = dx > 0 ? 1 : -1;
+			for (int r = 1; r <= range; ++r) {
+				for (int w = -width; w <= width; ++w) {
+					attack_cells.push_back({player_->x_ + sign * r, player_->y_ + w});
+				}
+			}
+		} else if (dy != 0) {
+			int sign = dy > 0 ? 1 : -1;
+			for (int r = 1; r <= range; ++r) {
+				for (int w = -width; w <= width; ++w) {
+					attack_cells.push_back({player_->x_ + w, player_->y_ + sign * r});
+				}
+			}
+		} else {
+			attack_cells.push_back({player_->x_, player_->y_ - 1});
+		}
+
+		// Broadcast attack effect
+		S2C_AttackEffect effect;
+		effect.size = sizeof(effect);
+		effect.type = S2C_ATTACK_EFFECT;
+		effect.object_id = id_;
+		effect.weapon_tier = player_->_weapon_tier;
+		effect.x = player_->x_;
+		effect.y = player_->y_;
+		effect.dir_x = player_->_dir_x;
+		effect.dir_y = player_->_dir_y;
+		
+		do_send(effect.size, reinterpret_cast<char*>(&effect));
+		visible_players_mutex.lock();
+		auto view_copy = visible_players;
+		visible_players_mutex.unlock();
+		for (auto& pid : view_copy) {
+			std::shared_ptr<SESSION> s = clients[pid].load();
+			if (s && s->state_ == client_state::playing) {
+				s->do_send(effect.size, reinterpret_cast<char*>(&effect));
+			}
+		}
+
+		// Apply damage to NPCs
+		auto nearby_ids = sector.get_objects_nearby_sector(player_->x_, player_->y_);
+		for (auto& oid : nearby_ids) {
+			if (is_npc_id(oid)) {
+				auto npc = npcs[oid].load();
+				if (!npc || !npc->is_active) continue;
+				bool hit = false;
+				for (auto& cell : attack_cells) {
+					if (npc->x_ == cell.first && npc->y_ == cell.second) {
+						hit = true;
+						break;
+					}
+				}
+				if (hit) {
+					npc->_hp -= damage;
+					if (npc->_hp <= 0) {
+						// Death
+						npc->is_active = false;
+						
+						// Reward
+						if (rand() % 2 == 0) player_->_rotten_flesh++;
+						else player_->_bone++;
+						player_->_gold += (rand() % 5 + 1);
+
+						// Broadcast remove
+						S2C_RemoveObject rm_pkt;
+						rm_pkt.size = sizeof(rm_pkt);
+						rm_pkt.type = S2C_REMOVE_OBJECT;
+						rm_pkt.object_id = oid;
+						do_send(rm_pkt.size, reinterpret_cast<char*>(&rm_pkt));
+						for (auto& pid : view_copy) {
+							std::shared_ptr<SESSION> s = clients[pid].load();
+							if (s && s->state_ == client_state::playing) {
+								s->do_send(rm_pkt.size, reinterpret_cast<char*>(&rm_pkt));
+							}
+						}
+						sector.remove_object(oid, npc->x_, npc->y_);
+					}
+				}
+			}
+		}
+		break;
 	}
 	case PACKET_TYPE::C2S_CHAT:
 	{
@@ -797,6 +924,34 @@ bool SESSION::proccess_packet(unsigned char* buff)
 		}
 		break;
 	}
+	case PACKET_TYPE::C2S_TEST_WEAPON:
+	{
+		C2S_TestWeapon* pkt = reinterpret_cast<C2S_TestWeapon*>(buff);
+		player_->_weapon_tier = pkt->weapon_tier;
+		
+		S2C_StatusChange stat;
+		stat.size = sizeof(stat);
+		stat.type = S2C_STATUS_CHANGE;
+		stat.object_id = id_;
+		stat.hp = 100;
+		stat.max_hp = 100;
+		stat.exp = 0;
+		stat.level = 1;
+		stat.armor_tier = player_->get_armor_tier();
+		stat.weapon_tier = player_->_weapon_tier;
+		do_send(stat.size, reinterpret_cast<char*>(&stat));
+
+		visible_players_mutex.lock();
+		auto view_copy = visible_players;
+		visible_players_mutex.unlock();
+		for (auto& pid : view_copy) {
+			std::shared_ptr<SESSION> s = clients[pid].load();
+			if (s && s->state_ == client_state::playing) {
+				s->do_send(stat.size, reinterpret_cast<char*>(&stat));
+			}
+		}
+		break;
+	}
 
 	default:
 		std::cout << "Unknown Packet Type from Client[" << id_ << "]" << std::endl;
@@ -817,6 +972,8 @@ void SESSION::send_move_packet(int move_player_id, uint32_t timestamp)
 		move_packet.object_id = move_player_id;
 		move_packet.x = npc->x_;
 		move_packet.y = npc->y_;
+		move_packet.dir_x = 0;
+		move_packet.dir_y = -1;
 		move_packet.move_time = timestamp;
 		do_send(move_packet.size, reinterpret_cast<char*>(&move_packet));
 		return;
@@ -831,6 +988,8 @@ void SESSION::send_move_packet(int move_player_id, uint32_t timestamp)
 	move_packet.object_id = move_player_id;
 	move_packet.x = session->player_->x_;
 	move_packet.y = session->player_->y_;
+	move_packet.dir_x = session->player_->_dir_x;
+	move_packet.dir_y = session->player_->_dir_y;
 	move_packet.move_time = timestamp;
 	do_send(move_packet.size, reinterpret_cast<char*>(&move_packet));
 }
@@ -847,6 +1006,9 @@ void SESSION::send_add_player(int player_id)
 	add_packet.x = session->player_->x_;
 	add_packet.y = session->player_->y_;
 	add_packet.armor_tier = session->player_->get_armor_tier();
+	add_packet.weapon_tier = session->player_->_weapon_tier;
+	add_packet.dir_x = session->player_->_dir_x;
+	add_packet.dir_y = session->player_->_dir_y;
 
 	visible_players_mutex.lock();
 	if (visible_players.contains(player_id))
@@ -881,6 +1043,9 @@ void SESSION::send_already_spawn_players()
 					add_pkt.exp       = npc->_exp;
 					add_pkt.level     = npc->_level;
 					add_pkt.armor_tier = 0;
+					add_pkt.weapon_tier = 0;
+					add_pkt.dir_x = 0;
+					add_pkt.dir_y = -1;
 					do_send(add_pkt.size, reinterpret_cast<char*>(&add_pkt));
 
 					visible_players_mutex.lock();

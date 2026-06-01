@@ -1,4 +1,4 @@
-#include "pch.h"
+﻿#include "pch.h"
 #include "NetworkManager.h"
 
 #include "common.h"
@@ -121,7 +121,7 @@ void NetworkManager::process_packet(char* ptr)
 	case S2C_AVATAR_INFO: {
 		S2C_AvatarInfo* p = reinterpret_cast<S2C_AvatarInfo*>(ptr);
 		gm->set_my_id(p->playerId);
-		gm->players()[p->playerId] = { p->playerId, gm->username(), p->x, p->y, p->armor_tier };
+		gm->players()[p->playerId] = { p->playerId, gm->username(), p->x, p->y, p->armor_tier, p->weapon_tier, p->dir_x, p->dir_y };
 		std::cout << "Avatar Info: ID=" << p->playerId << " at (" << p->x << ", " << p->y << "), ArmorTier=" << (int)p->armor_tier << "\n";
 		break;
 	}
@@ -129,11 +129,11 @@ void NetworkManager::process_packet(char* ptr)
 		S2C_AddObject* p = reinterpret_cast<S2C_AddObject*>(ptr);
 		if (is_npc_id(p->object_id))
 		{
-			gm->npcs().emplace(p->object_id, Object{ p->object_id, p->obj_name, p->x, p->y, p->armor_tier });
+			gm->npcs().emplace(p->object_id, Object{ p->object_id, p->obj_name, p->x, p->y, p->armor_tier, p->weapon_tier, p->dir_x, p->dir_y });
 		}
 		else if (p->object_id == gm->my_id()) break;
 		else {
-			gm->players().emplace(p->object_id, Object{ p->object_id, p->obj_name, p->x, p->y, p->armor_tier });
+			gm->players().emplace(p->object_id, Object{ p->object_id, p->obj_name, p->x, p->y, p->armor_tier, p->weapon_tier, p->dir_x, p->dir_y });
 			std::cout << "Add Player: ID=" << p->object_id << ", Name=" << p->obj_name << " at (" << p->x << ", " << p->y << "), ArmorTier=" << (int)p->armor_tier << "\n";
 		}
 		break;
@@ -145,12 +145,21 @@ void NetworkManager::process_packet(char* ptr)
 			if (gm->npcs().contains(p->object_id)) {
 				gm->npcs()[p->object_id].x = p->x;
 				gm->npcs()[p->object_id].y = p->y;
+				gm->npcs()[p->object_id].dir_x = p->dir_x;
+				gm->npcs()[p->object_id].dir_y = p->dir_y;
 			}
 		}
 		else if (gm->players().contains(p->object_id)) {
 			gm->players()[p->object_id].x = p->x;
 			gm->players()[p->object_id].y = p->y;
+			gm->players()[p->object_id].dir_x = p->dir_x;
+			gm->players()[p->object_id].dir_y = p->dir_y;
 		}
+		break;
+	}
+	case S2C_ATTACK_EFFECT: {
+		S2C_AttackEffect* p = reinterpret_cast<S2C_AttackEffect*>(ptr);
+		gm->attack_effects().push_back({ p->object_id, p->weapon_tier, p->x, p->y, p->dir_x, p->dir_y, std::chrono::steady_clock::now() });
 		break;
 	}
 	case S2C_CHAT_MESSAGE: {
@@ -202,6 +211,18 @@ void NetworkManager::process_packet(char* ptr)
 		{
 			gm->players().erase(p->object_id);
 			std::cout << "Remove Player: ID=" << p->object_id << "\n";
+		}
+		break;
+	}
+	case S2C_STATUS_CHANGE: {
+		S2C_StatusChange* p = reinterpret_cast<S2C_StatusChange*>(ptr);
+		if (gm->players().contains(p->object_id)) {
+			gm->players()[p->object_id].armor_tier = p->armor_tier;
+			gm->players()[p->object_id].weapon_tier = p->weapon_tier;
+		}
+		else if (gm->npcs().contains(p->object_id)) {
+			gm->npcs()[p->object_id].armor_tier = p->armor_tier;
+			gm->npcs()[p->object_id].weapon_tier = p->weapon_tier;
 		}
 		break;
 	}
