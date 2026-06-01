@@ -22,6 +22,14 @@ public:
 		_swords[4] = new Gdiplus::Image(L"Resource/iron_sword.png");
 		_swords[5] = new Gdiplus::Image(L"Resource/diamond_sword.png");
 		_swords[6] = new Gdiplus::Image(L"Resource/netherite_sword.png");
+		
+		_player_head = new Gdiplus::Image(L"Resource/steve_head.png");
+		_mob_heads[0] = nullptr;
+		_mob_heads[1] = new Gdiplus::Image(L"Resource/zombie_head.png");
+		_mob_heads[2] = new Gdiplus::Image(L"Resource/skeleton_head.png");
+		_mob_heads[3] = new Gdiplus::Image(L"Resource/creeper_head.png");
+		_mob_heads[4] = new Gdiplus::Image(L"Resource/enderman_head.png");
+		_mob_heads[5] = new Gdiplus::Image(L"Resource/iron_golem_head.png");
 	}
 	~RenderManager();
 	void Release() override;
@@ -34,4 +42,6 @@ private:
 	HBITMAP _hBoardBmp;
 	Gdiplus::Image* _helmets[5];
 	Gdiplus::Image* _swords[7];
+	Gdiplus::Image* _player_head;
+	Gdiplus::Image* _mob_heads[6];
 };

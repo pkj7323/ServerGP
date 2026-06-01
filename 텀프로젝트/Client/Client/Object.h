@@ -12,6 +12,7 @@ public:
 	char weapon_tier = 1;
 	short dir_x = 0;
 	short dir_y = -1;
+	int visual_id = 0;
 
 	// In-game Chat Bubble
 	std::wstring chat_msg;

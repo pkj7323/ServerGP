@@ -20,6 +20,10 @@ RenderManager::~RenderManager()
 			_swords[i] = nullptr;
 		}
 	}
+	if (_player_head) { delete _player_head; _player_head = nullptr; }
+	for (int i = 1; i <= 5; ++i) {
+		if (_mob_heads[i]) { delete _mob_heads[i]; _mob_heads[i] = nullptr; }
+	}
 }
 
 void RenderManager::Release()
@@ -39,6 +43,10 @@ void RenderManager::Release()
 			delete _swords[i];
 			_swords[i] = nullptr;
 		}
+	}
+	if (_player_head) { delete _player_head; _player_head = nullptr; }
+	for (int i = 1; i <= 5; ++i) {
+		if (_mob_heads[i]) { delete _mob_heads[i]; _mob_heads[i] = nullptr; }
 	}
 }
 
@@ -107,6 +115,17 @@ void RenderManager::Render(HWND hWnd)
 	}
 	SetBkMode(memDC, TRANSPARENT);
 	SetTextColor(memDC, RGB(255, 255, 255));
+	
+	// --- GDI+ UI Rendering (Graphics instance pulled up for head rendering) ---
+	Gdiplus::Graphics graphics(memDC);
+	
+	// 마인크래프트 특유의 도트(픽셀) 감성을 살리기 위해 NearestNeighbor(근접 보간) 필터링 적용!
+	graphics.SetInterpolationMode(Gdiplus::InterpolationModeNearestNeighbor);
+	graphics.SetPixelOffsetMode(Gdiplus::PixelOffsetModeHalf); // 픽셀 어긋남 방지
+
+	Gdiplus::FontFamily fontFamily(L"Malgun Gothic");
+	Gdiplus::Font font(&fontFamily, 14, Gdiplus::FontStyleBold, Gdiplus::UnitPixel);
+	
 	// 2. NPC 렌더링
 	for (auto& [id, npc] : npcs) {
 		int rel_x = npc.x - left_x;
@@ -115,25 +134,26 @@ void RenderManager::Render(HWND hWnd)
 		if (rel_x >= 0 && rel_x < VIEW_WIDTH && rel_y >= 0 && rel_y < VIEW_HEIGHT) {
 			int screen_y = (VIEW_HEIGHT - 1 - rel_y); // NPC도 Y 반전
 
-			HBRUSH hBrush = CreateSolidBrush(RGB(0, 255, 0));
-			HBRUSH oldB = (HBRUSH)SelectObject(memDC, hBrush);
-
 			int padX = cellWidth * 15 / 100;
 			int padY = cellHeight * 15 / 100;
 			int px = rel_x * cellWidth + padX;
 			int py = screen_y * cellHeight + padY;
-			int pr = (rel_x + 1) * cellWidth - padX;
-			int pb = (screen_y + 1) * cellHeight - padY;
+			int imgW = cellWidth - padX * 2;
+			int imgH = cellHeight - padY * 2;
 
-			Ellipse(memDC, px, py, pr, pb);
+			if (npc.visual_id > 0 && npc.visual_id <= 5 && _mob_heads[npc.visual_id]) {
+				graphics.DrawImage(_mob_heads[npc.visual_id], px, py, imgW, imgH);
+			} else {
+				HBRUSH hBrush = CreateSolidBrush(RGB(0, 255, 0));
+				HBRUSH oldB = (HBRUSH)SelectObject(memDC, hBrush);
+				Ellipse(memDC, px, py, px + imgW, py + imgH);
+				SelectObject(memDC, oldB);
+				DeleteObject(hBrush);
+			}
 
 			// --- 이름 출력 로직 추가 ---
-			// 유니코드 환경 호환성을 위해 std::string -> std::wstring 변환
 			std::wstring wName(npc.name.begin(), npc.name.end());
 			TextOut(memDC, px, py - 20, wName.c_str(), (int)wName.length());
-
-			SelectObject(memDC, oldB);
-			DeleteObject(hBrush);
 		}
 	}
 
@@ -145,23 +165,26 @@ void RenderManager::Render(HWND hWnd)
 		if (rel_x >= 0 && rel_x < VIEW_WIDTH && rel_y >= 0 && rel_y < VIEW_HEIGHT) {
 			int screen_y = (VIEW_HEIGHT - 1 - rel_y); // 플레이어도 Y 반전
 
-			HBRUSH hBrush = CreateSolidBrush(id == my_id ? RGB(255, 0, 0) : RGB(0, 0, 255));
-			HBRUSH oldB = (HBRUSH)SelectObject(memDC, hBrush);
-
 			int padX = cellWidth * 15 / 100;
 			int padY = cellHeight * 15 / 100;
 			int px = rel_x * cellWidth + padX;
 			int py = screen_y * cellHeight + padY;
-			int pr = (rel_x + 1) * cellWidth - padX;
-			int pb = (screen_y + 1) * cellHeight - padY;
+			int imgW = cellWidth - padX * 2;
+			int imgH = cellHeight - padY * 2;
 
-			Ellipse(memDC, px, py, pr, pb);
+			if (_player_head) {
+				graphics.DrawImage(_player_head, px, py, imgW, imgH);
+			} else {
+				HBRUSH hBrush = CreateSolidBrush(id == my_id ? RGB(255, 0, 0) : RGB(0, 0, 255));
+				HBRUSH oldB = (HBRUSH)SelectObject(memDC, hBrush);
+				Ellipse(memDC, px, py, px + imgW, py + imgH);
+				SelectObject(memDC, oldB);
+				DeleteObject(hBrush);
+			}
+
 			// --- 이름 출력 로직 추가 ---
 			std::wstring wName(player.name.begin(), player.name.end());
 			TextOut(memDC, px, py - 20, wName.c_str(), (int)wName.length());
-
-			SelectObject(memDC, oldB);
-			DeleteObject(hBrush);
 		}
 	}
 
@@ -182,9 +205,6 @@ void RenderManager::Render(HWND hWnd)
 
 	// --- GDI+ UI Rendering ---
 	{
-		Gdiplus::Graphics graphics(memDC);
-		Gdiplus::FontFamily fontFamily(L"Malgun Gothic");
-		Gdiplus::Font font(&fontFamily, 14, Gdiplus::FontStyleBold, Gdiplus::UnitPixel);
 		Gdiplus::SolidBrush whiteBrush(Gdiplus::Color(255, 255, 255, 255));
 		Gdiplus::SolidBrush yellowBrush(Gdiplus::Color(255, 255, 255, 0));
 		Gdiplus::SolidBrush blackTransBrush(Gdiplus::Color(150, 0, 0, 0));

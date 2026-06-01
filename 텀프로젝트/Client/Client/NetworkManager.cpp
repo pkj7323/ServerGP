@@ -1,4 +1,4 @@
-﻿#include "pch.h"
+#include "pch.h"
 #include "NetworkManager.h"
 
 #include "common.h"
@@ -129,11 +129,11 @@ void NetworkManager::process_packet(char* ptr)
 		S2C_AddObject* p = reinterpret_cast<S2C_AddObject*>(ptr);
 		if (is_npc_id(p->object_id))
 		{
-			gm->npcs().emplace(p->object_id, Object{ p->object_id, p->obj_name, p->x, p->y, p->armor_tier, p->weapon_tier, p->dir_x, p->dir_y });
+			gm->npcs().emplace(p->object_id, Object{ p->object_id, p->obj_name, p->x, p->y, p->armor_tier, p->weapon_tier, p->dir_x, p->dir_y, p->visual_id });
 		}
 		else if (p->object_id == gm->my_id()) break;
 		else {
-			gm->players().emplace(p->object_id, Object{ p->object_id, p->obj_name, p->x, p->y, p->armor_tier, p->weapon_tier, p->dir_x, p->dir_y });
+			gm->players().emplace(p->object_id, Object{ p->object_id, p->obj_name, p->x, p->y, p->armor_tier, p->weapon_tier, p->dir_x, p->dir_y, p->visual_id });
 			std::cout << "Add Player: ID=" << p->object_id << ", Name=" << p->obj_name << " at (" << p->x << ", " << p->y << "), ArmorTier=" << (int)p->armor_tier << "\n";
 		}
 		break;
