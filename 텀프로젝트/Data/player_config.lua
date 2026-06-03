@@ -13,6 +13,11 @@ PLAYER_CONFIG = {
     hp = 100,
     max_hp = 100,
     attack = 15,
+    attack_cooldown_ms = 200,
+    potion_heal_amount = 50,
+    skill_buff_duration_sec = 5,
+    potion_cooldown_ms = 5000,
+    skill_cooldown_ms = 15000,
 }
 
 -- helper function

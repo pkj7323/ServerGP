@@ -174,6 +174,11 @@ struct PlayerConfig {
 	int hp = 100;
 	int max_hp = 100;
 	int attack = 15;
+	int attack_cooldown_ms = 200;
+	int potion_heal_amount = 50;
+	int skill_buff_duration_sec = 5;
+	int potion_cooldown_ms = 5000;
+	int skill_cooldown_ms = 15000;
 };
 
 inline PlayerConfig load_player_config_lua(const char* lua_path)
@@ -207,8 +212,13 @@ inline PlayerConfig load_player_config_lua(const char* lua_path)
 	config.hp               = read_int("hp", 100);
 	config.max_hp           = read_int("max_hp", 100);
 	config.attack           = read_int("attack", 15);
+	config.attack_cooldown_ms = read_int("attack_cooldown_ms", 200);
+	config.potion_heal_amount = read_int("potion_heal_amount", 50);
+	config.skill_buff_duration_sec = read_int("skill_buff_duration_sec", 5);
+	config.potion_cooldown_ms = read_int("potion_cooldown_ms", 5000);
+	config.skill_cooldown_ms = read_int("skill_cooldown_ms", 15000);
 
-	std::cout << "[NpcLoader] PLAYER_CONFIG 로드 완료: MoveCooldown=" << config.move_cooldown_ms << "ms" << std::endl;
+	std::cout << "[NpcLoader] PLAYER_CONFIG 로드 완료" << std::endl;
 
 	lua_pop(L, 1); // pop PLAYER_CONFIG
 	lua_close(L);

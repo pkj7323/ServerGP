@@ -168,7 +168,7 @@ void NetworkManager::process_packet(char* ptr)
 	}
 	case S2C_ATTACK_EFFECT: {
 		S2C_AttackEffect* p = reinterpret_cast<S2C_AttackEffect*>(ptr);
-		gm->attack_effects().push_back({ p->object_id, p->weapon_tier, p->x, p->y, p->dir_x, p->dir_y, std::chrono::steady_clock::now() });
+		gm->attack_effects().push_back({ p->object_id, p->weapon_tier, p->attack_type, p->x, p->y, p->dir_x, p->dir_y, std::chrono::steady_clock::now() });
 		break;
 	}
 	case S2C_CHAT_MESSAGE: {

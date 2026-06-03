@@ -44,6 +44,9 @@ public:
 		_oak_sapling_img = new Gdiplus::Image(L"Resource/oak_sapling.png");
 		_spruce_sapling_img = new Gdiplus::Image(L"Resource/spruce_sapling.png");
 		_cactus_img = new Gdiplus::Image(L"Resource/cactus.png");
+		
+		_health_potion_img = new Gdiplus::Image(L"Resource/health_potion.png");
+		_blaze_powder_img = new Gdiplus::Image(L"Resource/blaze_powder.png");
 	}
 	~RenderManager();
 	void Release() override;
@@ -66,4 +69,7 @@ private:
 	Gdiplus::Image* _oak_sapling_img;
 	Gdiplus::Image* _spruce_sapling_img;
 	Gdiplus::Image* _cactus_img;
+
+	Gdiplus::Image* _health_potion_img;
+	Gdiplus::Image* _blaze_powder_img;
 };

@@ -1,4 +1,6 @@
-﻿#include <iostream>
+﻿#define NOMINMAX
+#include <algorithm>
+#include <iostream>
 #include <WS2tcpip.h>
 #include <array>
 #pragma comment(lib, "WS2_32.lib")
@@ -275,14 +277,24 @@ public:
 	char _weapon_tier = 1;
 	short _dir_x = 0;
 	short _dir_y = -1;
+	int _hp = 100;
+	int _maxHp = 100;
 
 	// Inventory
 	int _gold = 0;
 	std::unordered_map<int, int> inventory; // item_id -> count
 
 	std::chrono::time_point<std::chrono::system_clock> last_move_timestamp_;
+	std::chrono::time_point<std::chrono::system_clock> last_attack_time_;
+	std::chrono::time_point<std::chrono::system_clock> potion_cooldown_end_time_;
+	std::chrono::time_point<std::chrono::system_clock> skill_cooldown_end_time_;
+	std::chrono::time_point<std::chrono::system_clock> buff_end_time_;
 
-	Player() : BaseObject(), last_move_timestamp_(std::chrono::system_clock::now()) {}
+	Player() : BaseObject(), last_move_timestamp_(std::chrono::system_clock::now()),
+			   last_attack_time_(std::chrono::system_clock::now()),
+			   potion_cooldown_end_time_(std::chrono::system_clock::now()),
+			   skill_cooldown_end_time_(std::chrono::system_clock::now()),
+			   buff_end_time_(std::chrono::system_clock::now()) {}
 
 	void add_item(int item_id, int count) {
 		inventory[item_id] += count;
@@ -520,8 +532,8 @@ public:
 		auto now = std::chrono::system_clock::now();
 		if (_hp < _maxHp && std::chrono::duration_cast<std::chrono::seconds>(now - last_hit_time_).count() >= 5) {
 			_hp += _maxHp / 10;
-			if (_hp > _maxHp) _hp = _maxHp;
-			
+			_hp = std::min(_hp, _maxHp);
+
 			S2C_ChatMessage chat_pkt;
 			chat_pkt.size = sizeof(chat_pkt);
 			chat_pkt.type = S2C_CHAT_MESSAGE;
@@ -864,41 +876,115 @@ bool SESSION::proccess_packet(unsigned char* buff)
 		break;
 		break;
 	}
+	case PACKET_TYPE::C2S_USE_QUICKSLOT:
+	{
+		C2S_UseQuickSlot* pkt = reinterpret_cast<C2S_UseQuickSlot*>(buff);
+		auto now = std::chrono::system_clock::now();
+
+		if (pkt->slot_id == 1) { // Health Potion
+			if (now >= player_->potion_cooldown_end_time_) {
+				player_->potion_cooldown_end_time_ = now + std::chrono::milliseconds(g_player_config.potion_cooldown_ms);
+				player_->_hp += g_player_config.potion_heal_amount;
+				player_->_hp = std::min(player_->_hp, player_->_maxHp);
+
+				// Send status update
+				S2C_StatusChange stat;
+				stat.size = sizeof(stat);
+				stat.type = S2C_STATUS_CHANGE;
+				stat.object_id = id_;
+				stat.hp = player_->_hp;
+				stat.max_hp = player_->_maxHp;
+				stat.exp = 0; // TODO: Track EXP in Player
+				stat.level = 1;
+				stat.armor_tier = player_->get_armor_tier();
+				stat.weapon_tier = player_->_weapon_tier;
+				do_send(stat.size, reinterpret_cast<char*>(&stat));
+
+				visible_players_mutex.lock();
+				auto view_copy = visible_players;
+				visible_players_mutex.unlock();
+				for (auto& pid : view_copy) {
+					std::shared_ptr<SESSION> s = clients[pid].load();
+					if (s && s->state_ == client_state::playing) {
+						s->do_send(stat.size, reinterpret_cast<char*>(&stat));
+					}
+				}
+			}
+		} else if (pkt->slot_id == 2) { // Buff Skill
+			if (now >= player_->skill_cooldown_end_time_) {
+				player_->skill_cooldown_end_time_ = now + std::chrono::milliseconds(g_player_config.skill_cooldown_ms);
+				player_->buff_end_time_ = now + std::chrono::seconds(g_player_config.skill_buff_duration_sec);
+				// We don't send status change here as the client handles the timer UI implicitly upon successful use.
+			}
+		}
+		break;
+	}
 	case PACKET_TYPE::C2S_ATTACK:
 	{
-		int range = 1;
-		int width = 0;
+		auto now = std::chrono::system_clock::now();
+		if (std::chrono::duration_cast<std::chrono::milliseconds>(now - player_->last_attack_time_).count() < g_player_config.attack_cooldown_ms) {
+			break; // Cooldown not met
+		}
+		player_->last_attack_time_ = now;
+
+		bool has_buff = now < player_->buff_end_time_;
+
 		int damage = player_->_weapon_tier;
-		switch(player_->_weapon_tier) {
-		case 1: range = 1; width = 0; break; // Wood: 1
-		case 2: range = 1; width = 1; break; // Gold: 1x3
-		case 3: range = 2; width = 1; break; // Copper: 2x3
-		case 4: range = 3; width = 1; break; // Iron: 3x3
-		case 5: range = 3; width = 1; break; // Diamond: 3x3
-		case 6: range = 3; width = 2; break; // Netherite: 3x5
-		default: range = 1; width = 0; break;
+		if (has_buff) {
+			damage += 1; // Increase damage during buff
 		}
 
 		std::vector<std::pair<int, int>> attack_cells;
 		short dx = player_->_dir_x;
 		short dy = player_->_dir_y;
-		
-		if (dx != 0) {
-			int sign = dx > 0 ? 1 : -1;
-			for (int r = 1; r <= range; ++r) {
-				for (int w = -width; w <= width; ++w) {
-					attack_cells.emplace_back(player_->x_ + sign * r, player_->y_ + w);
-				}
-			}
-		} else if (dy != 0) {
-			int sign = dy > 0 ? 1 : -1;
-			for (int r = 1; r <= range; ++r) {
-				for (int w = -width; w <= width; ++w) {
-					attack_cells.emplace_back(player_->x_ + w, player_->y_ + sign * r);
+
+		if (has_buff) {
+			// AoE Half-circle attack
+			int radius = 1 + player_->_weapon_tier; // Radius grows with weapon tier
+			for (int y = player_->y_ - radius; y <= player_->y_ + radius; ++y) {
+				for (int x = player_->x_ - radius; x <= player_->x_ + radius; ++x) {
+					float dist = std::sqrt(std::pow(x - player_->x_, 2) + std::pow(y - player_->y_, 2));
+					if (dist <= radius) {
+						// Check if within half-circle (dot product > 0)
+						int rel_x = x - player_->x_;
+						int rel_y = y - player_->y_;
+						if (rel_x * dx + rel_y * dy >= 0) {
+							attack_cells.emplace_back(x, y);
+						}
+					}
 				}
 			}
 		} else {
-			attack_cells.emplace_back(player_->x_, player_->y_ - 1);
+			// Normal rectangle attack
+			int range = 1;
+			int width = 0;
+			switch(player_->_weapon_tier) {
+			case 1: range = 1; width = 0; break;
+			case 2: range = 1; width = 1; break;
+			case 3: range = 2; width = 1; break;
+			case 4: range = 3; width = 1; break;
+			case 5: range = 3; width = 1; break;
+			case 6: range = 3; width = 2; break;
+			default: range = 1; width = 0; break;
+			}
+			
+			if (dx != 0) {
+				int sign = dx > 0 ? 1 : -1;
+				for (int r = 1; r <= range; ++r) {
+					for (int w = -width; w <= width; ++w) {
+						attack_cells.emplace_back(player_->x_ + sign * r, player_->y_ + w);
+					}
+				}
+			} else if (dy != 0) {
+				int sign = dy > 0 ? 1 : -1;
+				for (int r = 1; r <= range; ++r) {
+					for (int w = -width; w <= width; ++w) {
+						attack_cells.emplace_back(player_->x_ + w, player_->y_ + sign * r);
+					}
+				}
+			} else {
+				attack_cells.emplace_back(player_->x_, player_->y_ - 1);
+			}
 		}
 
 		// Broadcast attack effect
@@ -907,6 +993,7 @@ bool SESSION::proccess_packet(unsigned char* buff)
 		effect.type = S2C_ATTACK_EFFECT;
 		effect.object_id = id_;
 		effect.weapon_tier = player_->_weapon_tier;
+		effect.attack_type = has_buff ? 1 : 0;
 		effect.x = player_->x_;
 		effect.y = player_->y_;
 		effect.dir_x = player_->_dir_x;

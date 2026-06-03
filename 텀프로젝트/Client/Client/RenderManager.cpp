@@ -344,51 +344,89 @@ static auto last_time = std::chrono::steady_clock::now();
 
 		// 4.8 Draw Attack Effects
 		auto& effects = gm->attack_effects();
-		auto now = std::chrono::steady_clock::now();
+		now = std::chrono::steady_clock::now();
 		for (auto it = effects.begin(); it != effects.end(); ) {
-			if (std::chrono::duration_cast<std::chrono::milliseconds>(now - it->start_time).count() > 300) {
+			int elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - it->start_time).count();
+			if (elapsed > 300) {
 				it = effects.erase(it);
 			} else {
-				int range = 1;
-				int width = 0;
-				switch(it->tier) {
-				case 1: range = 1; width = 0; break;
-				case 2: range = 1; width = 1; break;
-				case 3: range = 2; width = 1; break;
-				case 4: range = 3; width = 1; break;
-				case 5: range = 3; width = 1; break;
-				case 6: range = 3; width = 2; break;
-				default: range = 1; width = 0; break;
-				}
-
-				Gdiplus::SolidBrush effectBrush(Gdiplus::Color(100, 255, 0, 0));
-
 				short dx = it->dx;
 				short dy = it->dy;
-				
-				std::vector<std::pair<int, int>> cells;
-				if (dx != 0) {
-					int sign = dx > 0 ? 1 : -1;
-					for (int r = 1; r <= range; ++r) {
-						for (int w = -width; w <= width; ++w) cells.emplace_back(it->x + sign * r, it->y + w);
-					}
-				} else if (dy != 0) {
-					int sign = dy > 0 ? 1 : -1;
-					for (int r = 1; r <= range; ++r) {
-						for (int w = -width; w <= width; ++w) cells.emplace_back(it->x + w, it->y + sign * r);
-					}
-				} else {
-					cells.emplace_back(it->x, it->y - 1);
-				}
+				Gdiplus::SolidBrush effectBrush(Gdiplus::Color(100, 255, 0, 0));
 
-				for(auto& cell : cells) {
-					int rel_x = cell.first - left_x;
-					int rel_y = cell.second - bottom_y;
-					if (rel_x >= 0 && rel_x < VIEW_WIDTH && rel_y >= 0 && rel_y < VIEW_HEIGHT) {
-						float screen_y = (VIEW_HEIGHT - 1.0f - rel_y);
-						int px = rel_x * cellWidth;
-						int py = (int)(screen_y * cellHeight);
-						graphics.FillRectangle(&effectBrush, px, py, cellWidth, cellHeight);
+				if (it->attack_type == 1) { // Half-circle AoE
+					int radius = 1 + it->tier;
+					float px = (it->x - left_x) * cellWidth;
+					float py = (VIEW_HEIGHT - 1.0f - (it->y - bottom_y)) * cellHeight;
+					
+					// Center of the player cell
+					float cx = px + cellWidth / 2.0f;
+					float cy = py + cellHeight / 2.0f;
+					float r_px = radius * cellWidth; // Approximation for pixel radius
+
+					// Determine angle based on direction
+					float startAngle = 0.0f;
+					if (dx == 1) startAngle = -90.0f; // Right -> facing east, sweep from north to south
+					else if (dx == -1) startAngle = 90.0f; // Left
+					else if (dy == 1) startAngle = 180.0f; // Up
+					else if (dy == -1) startAngle = 0.0f; // Down
+					
+					graphics.FillPie(&effectBrush, cx - r_px, cy - r_px, r_px * 2, r_px * 2, startAngle, 180.0f);
+
+					// Sword animation
+					if (it->tier > 0 && it->tier <= 6) {
+						Gdiplus::Image* sword_img = _swords[it->tier];
+						if (sword_img) {
+							float progress = elapsed / 300.0f; // 0.0 to 1.0
+							float currentAngle = startAngle + (progress * 180.0f); // Sweep 180 degrees
+							
+							graphics.TranslateTransform(cx, cy);
+							graphics.RotateTransform(currentAngle);
+							
+							// Draw sword with handle at center (left-bottom roughly)
+							// Assuming 32x32 sword where handle is bottom-left (0, 32)
+							graphics.DrawImage(sword_img, 0, -32, 32, 32);
+							
+							graphics.ResetTransform();
+						}
+					}
+				} else { // Normal rectangle attack
+					int range = 1;
+					int width = 0;
+					switch(it->tier) {
+					case 1: range = 1; width = 0; break;
+					case 2: range = 1; width = 1; break;
+					case 3: range = 2; width = 1; break;
+					case 4: range = 3; width = 1; break;
+					case 5: range = 3; width = 1; break;
+					case 6: range = 3; width = 2; break;
+					default: range = 1; width = 0; break;
+					}
+					
+					std::vector<std::pair<int, int>> cells;
+					if (dx != 0) {
+						int sign = dx > 0 ? 1 : -1;
+						for (int r = 1; r <= range; ++r) {
+							for (int w = -width; w <= width; ++w) cells.emplace_back(it->x + sign * r, it->y + w);
+						}
+					} else if (dy != 0) {
+						int sign = dy > 0 ? 1 : -1;
+						for (int r = 1; r <= range; ++r) {
+							for (int w = -width; w <= width; ++w) cells.emplace_back(it->x + w, it->y + sign * r);
+						}
+					} else {
+						cells.emplace_back(it->x, it->y - 1);
+					}
+
+					for(auto& cell : cells) {
+						int rel_x = cell.first - left_x;
+						int rel_y = cell.second - bottom_y;
+						if (rel_x >= 0 && rel_x < VIEW_WIDTH && rel_y >= 0 && rel_y < VIEW_HEIGHT) {
+							float screen_y = (VIEW_HEIGHT - 1.0f - rel_y);
+							int px = rel_x * cellWidth;
+							int py = (int)(screen_y * cellHeight);
+							graphics.FillRectangle(&effectBrush, px, py, cellWidth, cellHeight);
+						}
 					}
 				}
 				++it;
@@ -502,6 +540,59 @@ static auto last_time = std::chrono::steady_clock::now();
 				int slotX = invX + 20 + c * 40;
 				int slotY = invY + 80 + r * 40;
 				graphics.DrawRectangle(&whitePen, slotX, slotY, 30, 30);
+			}
+		}
+
+		// 7. Quick Slot & Buff UI
+		{
+			int qsWidth = 40;
+			int qsHeight = 40;
+			int spacing = 10;
+			int startX = width - (qsWidth * 2 + spacing) - 20; // Bottom right
+			int startY = height - qsHeight - 20;
+
+			Gdiplus::SolidBrush darkTransBrush(Gdiplus::Color(150, 0, 0, 0));
+			Gdiplus::StringFormat formatCenter;
+			formatCenter.SetAlignment(Gdiplus::StringAlignmentCenter);
+			formatCenter.SetLineAlignment(Gdiplus::StringAlignmentCenter);
+			
+			// Slot 1: Potion
+			graphics.DrawRectangle(&whitePen, startX, startY, qsWidth, qsHeight);
+			if (_health_potion_img) graphics.DrawImage(_health_potion_img, startX + 4, startY + 4, 32, 32);
+			graphics.DrawString(L"1", -1, &font, Gdiplus::PointF(static_cast<float>(startX), static_cast<float>(startY - 15)), &whiteBrush);
+
+			int potionElapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - gm->last_potion_use()).count();
+			if (potionElapsed < 5000) {
+				graphics.FillRectangle(&darkTransBrush, startX, startY, qsWidth, qsHeight);
+				float remain = (5000 - potionElapsed) / 1000.0f;
+				wchar_t buf[16];
+				swprintf(buf, 16, L"%.1f", remain);
+				graphics.DrawString(buf, -1, &font, Gdiplus::RectF((float)startX, (float)startY, (float)qsWidth, (float)qsHeight), &formatCenter, &whiteBrush);
+			}
+
+			// Slot 2: Skill
+			int slot2X = startX + qsWidth + spacing;
+			graphics.DrawRectangle(&whitePen, slot2X, startY, qsWidth, qsHeight);
+			if (_blaze_powder_img) graphics.DrawImage(_blaze_powder_img, slot2X + 4, startY + 4, 32, 32);
+			graphics.DrawString(L"2", -1, &font, Gdiplus::PointF(static_cast<float>(slot2X), static_cast<float>(startY - 15)), &whiteBrush);
+
+			int skillElapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - gm->last_skill_use()).count();
+			if (skillElapsed < 15000) {
+				graphics.FillRectangle(&darkTransBrush, slot2X, startY, qsWidth, qsHeight);
+				float remain = (15000 - skillElapsed) / 1000.0f;
+				wchar_t buf[16];
+				swprintf(buf, 16, L"%.1f", remain);
+				graphics.DrawString(buf, -1, &font, Gdiplus::RectF((float)slot2X, (float)startY, (float)qsWidth, (float)qsHeight), &formatCenter, &whiteBrush);
+			}
+
+			// Buff Gauge
+			if (now < gm->buff_end_time()) {
+				int buffRemain = std::chrono::duration_cast<std::chrono::milliseconds>(gm->buff_end_time() - now).count();
+				float buffSec = buffRemain / 1000.0f;
+				wchar_t buffText[64];
+				swprintf(buffText, 64, L"스킬 유지: %.1f초", buffSec);
+				Gdiplus::SolidBrush orangeBrush(Gdiplus::Color(255, 200, 100, 0));
+				graphics.DrawString(buffText, -1, &font, Gdiplus::PointF(static_cast<float>(width / 2 - 50), 50.0f), &orangeBrush);
 			}
 		}
 	}

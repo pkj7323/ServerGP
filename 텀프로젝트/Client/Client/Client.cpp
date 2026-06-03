@@ -1,4 +1,4 @@
-﻿#include "pch.h"
+#include "pch.h"
 #include "GameManager.h"
 #include "NetworkManager.h"
 #include "RenderManager.h"
@@ -78,11 +78,30 @@ LRESULT CALLBACK window_proc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lPar
 			gm->toggle_inventory();
 			return 0;
 		}
-		if (wParam >= '1' && wParam <= '6') {
+		if (wParam == '1' || wParam == '2') {
+			auto now = std::chrono::steady_clock::now();
+			if (wParam == '1' && std::chrono::duration_cast<std::chrono::milliseconds>(now - gm->last_potion_use()).count() >= 5000) {
+				gm->start_potion_cooldown();
+				C2S_UseQuickSlot p;
+				p.size = sizeof(p);
+				p.type = C2S_USE_QUICKSLOT;
+				p.slot_id = 1;
+				NetworkManager::Instance()->send_packet(&p);
+			} else if (wParam == '2' && std::chrono::duration_cast<std::chrono::milliseconds>(now - gm->last_skill_use()).count() >= 15000) {
+				gm->start_skill_cooldown();
+				C2S_UseQuickSlot p;
+				p.size = sizeof(p);
+				p.type = C2S_USE_QUICKSLOT;
+				p.slot_id = 2;
+				NetworkManager::Instance()->send_packet(&p);
+			}
+			return 0;
+		}
+		if (wParam >= '3' && wParam <= '8') {
 			C2S_TestWeapon p;
 			p.size = sizeof(p);
 			p.type = C2S_TEST_WEAPON;
-			p.weapon_tier = static_cast<char>(wParam - '0');
+			p.weapon_tier = static_cast<char>(wParam - '2'); // '3'->1, '4'->2...
 			NetworkManager::Instance()->send_packet(&p);
 			return 0;
 		}

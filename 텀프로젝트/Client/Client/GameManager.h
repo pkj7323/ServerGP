@@ -9,6 +9,7 @@
 struct AttackEffect {
 	int id;
 	char tier;
+	char attack_type;
 	short x, y, dx, dy;
 	std::chrono::time_point<std::chrono::steady_clock> start_time;
 };
@@ -72,6 +73,12 @@ public:
 
 	std::vector<AttackEffect>& attack_effects() { return _attackEffects; }
 
+	void start_potion_cooldown() { _last_potion_use = std::chrono::steady_clock::now(); }
+	void start_skill_cooldown() { _last_skill_use = std::chrono::steady_clock::now(); _buff_end_time = _last_skill_use + std::chrono::seconds(5); }
+	std::chrono::time_point<std::chrono::steady_clock> last_potion_use() const { return _last_potion_use; }
+	std::chrono::time_point<std::chrono::steady_clock> last_skill_use() const { return _last_skill_use; }
+	std::chrono::time_point<std::chrono::steady_clock> buff_end_time() const { return _buff_end_time; }
+
 private:
 	std::vector<AttackEffect> _attackEffects;
 	std::vector<std::wstring> _chatLogs;
@@ -85,6 +92,10 @@ private:
 	int _myId;
 	std::string _username;
 	bool _isRunning;
+
+	std::chrono::time_point<std::chrono::steady_clock> _last_potion_use;
+	std::chrono::time_point<std::chrono::steady_clock> _last_skill_use;
+	std::chrono::time_point<std::chrono::steady_clock> _buff_end_time;
 
 	std::array<uint8_t, WORLD_WIDTH* WORLD_HEIGHT> _visualMap{};
 	std::array<uint8_t, WORLD_WIDTH* WORLD_HEIGHT> _collisionMap{};

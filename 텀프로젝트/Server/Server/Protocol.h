@@ -24,6 +24,7 @@ enum PACKET_TYPE {
 						// STRESS TEST용으로 추가한 패킷입니다. 시작 마을에 몰리는 것을 방지.
 	C2S_LOGOUT,			// Client to Server: Logout request
 	C2S_TEST_WEAPON,
+	C2S_USE_QUICKSLOT,	// Client to Server: Use quick slot (1 or 2)
 
 	S2C_LOGIN_RESULT,	//	Server to Client: Login result
 						// 로그인 결과 패킷 (성공 여부와 메시지 포함)
@@ -78,7 +79,13 @@ struct C2S_Logout {
 struct C2S_TestWeapon {
 	unsigned char size;
 	PACKET_TYPE   type;
-	char weapon_tier;
+	char weapon_tier; // 1=Wood, 2=Stone, 3=Gold, 4=Iron, 5=Diamond, 6=Netherite
+};
+
+struct C2S_UseQuickSlot {
+	unsigned char size;
+	PACKET_TYPE   type;
+	char slot_id; // 1=Health Potion, 2=Skill
 };
 
 struct S2C_LoginResult {
@@ -164,6 +171,7 @@ struct S2C_AttackEffect {
 	PACKET_TYPE   type;
 	int object_id; // Who attacked
 	char weapon_tier;
+	char attack_type; // 0 = normal, 1 = skill (AoE half-circle)
 	short x; // Attacker's x
 	short y; // Attacker's y
 	short dir_x;
