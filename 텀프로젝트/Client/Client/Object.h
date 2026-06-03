@@ -8,6 +8,8 @@ public:
 	int id;
 	std::string name;
 	int16_t x, y;
+	float render_x = 0.0f;
+	float render_y = 0.0f;
 	char armor_tier = 0;
 	char weapon_tier = 1;
 	short dir_x = 0;

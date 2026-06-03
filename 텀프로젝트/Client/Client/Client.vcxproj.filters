@@ -25,6 +25,9 @@
     <Filter Include="소스 파일\Game">
       <UniqueIdentifier>{ae14d94b-f686-4687-9756-0cf62a3035dc}</UniqueIdentifier>
     </Filter>
+    <Filter Include="Data">
+      <UniqueIdentifier>{e71090ec-5b09-4be0-9508-881fd6a8a44c}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="Client.cpp">
@@ -71,5 +74,19 @@
     <ClInclude Include="..\..\Server\Server\Protocol.h">
       <Filter>헤더 파일</Filter>
     </ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="..\..\Data\item_config.lua">
+      <Filter>Data</Filter>
+    </None>
+    <None Include="..\..\Data\map_spawn.bin">
+      <Filter>Data</Filter>
+    </None>
+    <None Include="..\..\Data\npc_config.lua">
+      <Filter>Data</Filter>
+    </None>
+    <None Include="..\..\Data\player_config.lua">
+      <Filter>Data</Filter>
+    </None>
   </ItemGroup>
 </Project>

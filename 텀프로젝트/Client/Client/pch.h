@@ -19,6 +19,8 @@
 #include <unordered_map>
 #include <array>
 #include <fstream>
+#include <regex>
+#include <chrono>
 
 #include "Singleton.h"
 #include "Protocol.h"

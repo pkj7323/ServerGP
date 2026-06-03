@@ -166,6 +166,56 @@ inline ArmorConfig load_armor_config_lua(const char* lua_path)
 }
 
 // =============================================================================
+// load_player_config_lua()
+//   player_config.lua를 Lua VM으로 읽어 이동 쿨다운 등의 설정을 로드합니다.
+// =============================================================================
+struct PlayerConfig {
+	int move_cooldown_ms = 500;
+	int hp = 100;
+	int max_hp = 100;
+	int attack = 15;
+};
+
+inline PlayerConfig load_player_config_lua(const char* lua_path)
+{
+	PlayerConfig config;
+	lua_State* L = luaL_newstate();
+	luaL_openlibs(L);
+
+	if (luaL_dofile(L, lua_path) != LUA_OK) {
+		std::cerr << "[NpcLoader][ERROR] Lua 로드 실패 (PlayerConfig): "
+				  << lua_tostring(L, -1) << std::endl;
+		lua_close(L);
+		return config;
+	}
+
+	lua_getglobal(L, "PLAYER_CONFIG");
+	if (!lua_istable(L, -1)) {
+		std::cerr << "[NpcLoader][ERROR] PLAYER_CONFIG 테이블이 없습니다." << std::endl;
+		lua_close(L);
+		return config;
+	}
+
+	auto read_int = [&](const char* key, int default_val) -> int {
+		lua_getfield(L, -1, key);
+		int v = lua_isinteger(L, -1) ? static_cast<int>(lua_tointeger(L, -1)) : default_val;
+		lua_pop(L, 1);
+		return v;
+	};
+
+	config.move_cooldown_ms = read_int("move_cooldown_ms", 500);
+	config.hp               = read_int("hp", 100);
+	config.max_hp           = read_int("max_hp", 100);
+	config.attack           = read_int("attack", 15);
+
+	std::cout << "[NpcLoader] PLAYER_CONFIG 로드 완료: MoveCooldown=" << config.move_cooldown_ms << "ms" << std::endl;
+
+	lua_pop(L, 1); // pop PLAYER_CONFIG
+	lua_close(L);
+	return config;
+}
+
+// =============================================================================
 // load_spawn_map()
 //   map_spawn.bin(2000x2000 uint8_t)을 읽어 NPC_NONE(0)이 아닌 셀만
 //   SpawnEntry 벡터로 반환합니다. 약 200,000개 예상.

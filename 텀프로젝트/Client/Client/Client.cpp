@@ -3,6 +3,28 @@
 #include "NetworkManager.h"
 #include "RenderManager.h"
 
+
+int g_client_move_cooldown_ms = 500;
+auto g_last_move_time = std::chrono::steady_clock::now();
+
+void load_client_config() {
+	std::ifstream file("../../Data/player_config.lua");
+	if (!file.is_open()) {
+		std::cout << "[Client] Warning: Could not open player_config.lua, using defaults.\n";
+		return;
+	}
+	std::string line;
+	std::regex re("move_cooldown_ms\\s*=\\s*(\\d+)");
+	std::smatch match;
+	while (std::getline(file, line)) {
+		if (std::regex_search(line, match, re)) {
+			g_client_move_cooldown_ms = std::stoi(match[1].str());
+			std::cout << "[Client] Loaded move_cooldown_ms: " << g_client_move_cooldown_ms << "ms\n";
+			return;
+		}
+	}
+}
+
 LRESULT CALLBACK window_proc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) {
 	auto gm = GameManager::Instance();
 
@@ -87,6 +109,15 @@ LRESULT CALLBACK window_proc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lPar
 		default: return DefWindowProc(hWnd, message, wParam, lParam);
 		}
 
+		if (dx != 0 || dy != 0) {
+			auto now = std::chrono::steady_clock::now();
+			auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - g_last_move_time).count();
+			if (elapsed < g_client_move_cooldown_ms) {
+				return 0; // Ignore input
+			}
+			g_last_move_time = now;
+		}
+
 		// 클라이언트 사이드 충돌 체크 (현재 위치 + 방향)
 		if (gm->can_move(curr_x + dx, curr_y + dy)) {
 
@@ -137,6 +168,7 @@ int WINAPI WinMain(HINSTANCE hI, HINSTANCE hP, LPSTR lp, int nS) {
 	auto rm = RenderManager::Instance();
 
 	gm->Init();
+	load_client_config();
 
 	std::string server_ip;
 	std::cout << "Enter server IP (default 127.0.0.1): ";

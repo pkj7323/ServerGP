@@ -53,5 +53,14 @@
     <None Include="..\..\Data\npc_config.lua">
       <Filter>Data</Filter>
     </None>
+    <None Include="..\..\Data\item_config.lua">
+      <Filter>Data</Filter>
+    </None>
+    <None Include="..\..\Data\map_spawn.bin">
+      <Filter>Data</Filter>
+    </None>
+    <None Include="..\..\Data\player_config.lua">
+      <Filter>Data</Filter>
+    </None>
   </ItemGroup>
 </Project>

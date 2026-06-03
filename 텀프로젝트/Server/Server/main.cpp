@@ -248,6 +248,7 @@ private:
 };
 Sector sector;
 ArmorConfig g_armor_config;
+PlayerConfig g_player_config;
 
 class BaseObject {
 public:
@@ -271,7 +272,9 @@ public:
 	int _gold = 0;
 	std::unordered_map<int, int> inventory; // item_id -> count
 
-	Player() : BaseObject() {}
+	std::chrono::time_point<std::chrono::system_clock> last_move_timestamp_;
+
+	Player() : BaseObject(), last_move_timestamp_(std::chrono::system_clock::now()) {}
 
 	void add_item(int item_id, int count) {
 		inventory[item_id] += count;
@@ -696,10 +699,28 @@ bool SESSION::proccess_packet(unsigned char* buff)
 	}
 	case PACKET_TYPE::C2S_MOVE:
 	{
+		auto now = std::chrono::system_clock::now();
+		auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - player_->last_move_timestamp_).count();
+		
+		if (elapsed < g_player_config.move_cooldown_ms) {
+			// 이동 무시하고 현재 서버 기준 올바른 좌표를 클라로 다시 보내서 위치 보정(고무줄 현상 처리)
+			S2C_MoveObject res_pkt;
+			res_pkt.size = sizeof(res_pkt);
+			res_pkt.type = S2C_MOVE_OBJECT;
+			res_pkt.object_id = id_;
+			res_pkt.x = player_->x_;
+			res_pkt.y = player_->y_;
+			res_pkt.dir_x = player_->_dir_x;
+			res_pkt.dir_y = player_->_dir_y;
+			res_pkt.move_time = 0;
+			do_send(res_pkt.size, reinterpret_cast<char*>(&res_pkt));
+			break;
+		}
+		player_->last_move_timestamp_ = now;
+
 		C2S_Move* packet = reinterpret_cast<C2S_Move*>(buff);
 		int16_t dx = packet->x;
 		int16_t dy = packet->y;
-
 
 		int16_t old_x = player_->x_;
 		int16_t old_y = player_->y_;
@@ -1193,12 +1214,14 @@ void npc_initialize()
 	// Visual Studio 기본 실행 디렉터리: Server/Server/ 이므로 ../../Data/ 가 됨.
 	const std::string data_dir = "../../Data/";
 	const std::string lua_path  = data_dir + "npc_config.lua";
+	const std::string player_lua = data_dir + "player_config.lua";
 	const std::string spawn_path = data_dir + "map_spawn.bin";
 
-	// ── Step 1. Lua에서 NPC 타입 메타데이터 로드 ─────────────────────────────
-	std::cout << "[Server] Loading npc_config.lua..." << std::endl;
+	// ── Step 1. Lua에서 메타데이터 로드 ─────────────────────────────
+	std::cout << "[Server] Loading configs..." << std::endl;
 	auto meta_table   = load_npc_config_lua(lua_path.c_str());
-	g_armor_config    = load_armor_config_lua(lua_path.c_str());// 이건 부수적인건데 일단 추가
+	g_armor_config    = load_armor_config_lua(lua_path.c_str());
+	g_player_config   = load_player_config_lua(player_lua.c_str());
 
 	// ── Step 2. map_spawn.bin에서 스폰 위치 로드 ─────────────────────────────
 	std::cout << "[Server] Loading map_spawn.bin..." << std::endl;
@@ -1345,7 +1368,7 @@ void worker_thread()
 			new_session->state_ = client_state::connected;
 			if (new_session->player_) {
 				new_session->player_->id_ = current_id;
-				new_session->player_->x_ = 1000;
+				new_session->player_->x_ = 1000 + 100;
 				new_session->player_->y_ = 1000;
 				new_session->player_->_armor = g_armor_config.copper;
 

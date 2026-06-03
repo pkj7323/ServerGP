@@ -80,16 +80,32 @@ void RenderManager::Render(HWND hWnd)
 	int cellHeight = height / VIEW_HEIGHT;
 
 	// Viewport 계산 (Y-up 기준: bottom_y가 화면 맨 밑 줄)
-	int left_x = 0, bottom_y = 0;
+static auto last_time = std::chrono::steady_clock::now();
+	auto now = std::chrono::steady_clock::now();
+	float dt = std::chrono::duration<float>(now - last_time).count();
+	last_time = now;
+	if (dt > 0.1f) dt = 0.1f; // cap dt
+
+	float speed = 10.0f; // interpolation speed
+	for (auto& [id, player] : gm->players()) {
+		player.render_x += (player.x - player.render_x) * speed * dt;
+		player.render_y += (player.y - player.render_y) * speed * dt;
+	}
+	for (auto& [id, npc] : gm->npcs()) {
+		npc.render_x += (npc.x - npc.render_x) * speed * dt;
+		npc.render_y += (npc.y - npc.render_y) * speed * dt;
+	}
+
+	float left_x = 0.0f, bottom_y = 0.0f;
 	int my_id = gm->my_id();
 	auto& players = gm->players();
 	auto& npcs = gm->npcs();
 
 	if (players.contains(my_id)) {
-		left_x = players[my_id].x - VIEW_WIDTH / 2;
-		bottom_y = players[my_id].y - VIEW_HEIGHT / 2;
-		left_x = std::clamp(left_x, 0, WORLD_WIDTH - VIEW_WIDTH);
-		bottom_y = std::clamp(bottom_y, 0, WORLD_HEIGHT - VIEW_HEIGHT);
+		left_x = players[my_id].render_x - VIEW_WIDTH / 2.0f;
+		bottom_y = players[my_id].render_y - VIEW_HEIGHT / 2.0f;
+		left_x = std::clamp(left_x, 0.0f, (float)(WORLD_WIDTH - VIEW_WIDTH));
+		bottom_y = std::clamp(bottom_y, 0.0f, (float)(WORLD_HEIGHT - VIEW_HEIGHT));
 	}
 
 	// 1. 지형 렌더링
@@ -136,16 +152,16 @@ void RenderManager::Render(HWND hWnd)
 	
 	// 2. NPC 렌더링
 	for (auto& [id, npc] : npcs) {
-		int rel_x = npc.x - left_x;
-		int rel_y = npc.y - bottom_y;
+		float rel_x = npc.render_x - left_x;
+		float rel_y = npc.render_y - bottom_y;
 
 		if (rel_x >= 0 && rel_x < VIEW_WIDTH && rel_y >= 0 && rel_y < VIEW_HEIGHT) {
-			int screen_y = (VIEW_HEIGHT - 1 - rel_y); // NPC도 Y 반전
+			float screen_y = (VIEW_HEIGHT - 1.0f - rel_y); // NPC도 Y 반전
 
 			int padX = cellWidth * 15 / 100;
 			int padY = cellHeight * 15 / 100;
-			int px = rel_x * cellWidth + padX;
-			int py = screen_y * cellHeight + padY;
+			int px = (int)(rel_x * cellWidth) + padX;
+			int py = (int)(screen_y * cellHeight) + padY;
 			int imgW = cellWidth - padX * 2;
 			int imgH = cellHeight - padY * 2;
 
@@ -167,16 +183,16 @@ void RenderManager::Render(HWND hWnd)
 
 	// 3. Player 렌더링 (동일하게 Y 반전)
 	for (auto& [id, player] : players) {
-		int rel_x = player.x - left_x;
-		int rel_y = player.y - bottom_y;
+		float rel_x = player.render_x - left_x;
+		float rel_y = player.render_y - bottom_y;
 
 		if (rel_x >= 0 && rel_x < VIEW_WIDTH && rel_y >= 0 && rel_y < VIEW_HEIGHT) {
-			int screen_y = (VIEW_HEIGHT - 1 - rel_y); // 플레이어도 Y 반전
+			float screen_y = (VIEW_HEIGHT - 1.0f - rel_y); // 플레이어도 Y 반전
 
 			int padX = cellWidth * 15 / 100;
 			int padY = cellHeight * 15 / 100;
-			int px = rel_x * cellWidth + padX;
-			int py = screen_y * cellHeight + padY;
+			int px = (int)(rel_x * cellWidth) + padX;
+			int py = (int)(screen_y * cellHeight) + padY;
 			int imgW = cellWidth - padX * 2;
 			int imgH = cellHeight - padY * 2;
 
@@ -227,12 +243,12 @@ void RenderManager::Render(HWND hWnd)
 					continue;
 				}
 
-				int rel_x = obj.x - left_x;
-				int rel_y = obj.y - bottom_y;
+				float rel_x = obj.render_x - left_x;
+				float rel_y = obj.render_y - bottom_y;
 				if (rel_x >= 0 && rel_x < VIEW_WIDTH && rel_y >= 0 && rel_y < VIEW_HEIGHT) {
-					int screen_y = (VIEW_HEIGHT - 1 - rel_y);
-					int px = rel_x * cellWidth + (cellWidth / 2);
-					int py = screen_y * cellHeight - 30; // Above head
+					float screen_y = (VIEW_HEIGHT - 1.0f - rel_y);
+					int px = (int)(rel_x * cellWidth) + (cellWidth / 2);
+					int py = (int)(screen_y * cellHeight) - 30; // Above head
 
 					Gdiplus::RectF bounds;
 					graphics.MeasureString(obj.chat_msg.c_str(), -1, &font, Gdiplus::PointF(0, 0), &bounds);
@@ -251,12 +267,12 @@ void RenderManager::Render(HWND hWnd)
 		// 4.6 Draw Helmets for Players
 		for (auto& [id, player] : players) {
 			if (player.armor_tier > 0 && player.armor_tier <= 4) {
-				int rel_x = player.x - left_x;
-				int rel_y = player.y - bottom_y;
+				float rel_x = player.render_x - left_x;
+				float rel_y = player.render_y - bottom_y;
 				if (rel_x >= 0 && rel_x < VIEW_WIDTH && rel_y >= 0 && rel_y < VIEW_HEIGHT) {
-					int screen_y = (VIEW_HEIGHT - 1 - rel_y);
-					int px = rel_x * cellWidth + (cellWidth / 2);
-					int py = screen_y * cellHeight;
+					float screen_y = (VIEW_HEIGHT - 1.0f - rel_y);
+					int px = (int)(rel_x * cellWidth) + (cellWidth / 2);
+					int py = (int)(screen_y * cellHeight);
 					
 					Gdiplus::Image* helmet_img = _helmets[player.armor_tier];
 					if (helmet_img) {
@@ -272,12 +288,12 @@ void RenderManager::Render(HWND hWnd)
 		// 4.7 Draw Swords for Players
 		for (auto& [id, player] : players) {
 			if (player.weapon_tier > 0 && player.weapon_tier <= 6) {
-				int rel_x = player.x - left_x;
-				int rel_y = player.y - bottom_y;
+				float rel_x = player.render_x - left_x;
+				float rel_y = player.render_y - bottom_y;
 				if (rel_x >= 0 && rel_x < VIEW_WIDTH && rel_y >= 0 && rel_y < VIEW_HEIGHT) {
-					int screen_y = (VIEW_HEIGHT - 1 - rel_y);
-					int px = rel_x * cellWidth + (cellWidth / 2);
-					int py = screen_y * cellHeight + (cellHeight / 2);
+					float screen_y = (VIEW_HEIGHT - 1.0f - rel_y);
+					int px = (int)(rel_x * cellWidth) + (cellWidth / 2);
+					int py = (int)(screen_y * cellHeight) + (cellHeight / 2);
 					
 					Gdiplus::Image* sword_img = _swords[player.weapon_tier];
 					if (sword_img) {
@@ -342,9 +358,9 @@ void RenderManager::Render(HWND hWnd)
 					int rel_x = cell.first - left_x;
 					int rel_y = cell.second - bottom_y;
 					if (rel_x >= 0 && rel_x < VIEW_WIDTH && rel_y >= 0 && rel_y < VIEW_HEIGHT) {
-						int screen_y = (VIEW_HEIGHT - 1 - rel_y);
+						float screen_y = (VIEW_HEIGHT - 1.0f - rel_y);
 						int px = rel_x * cellWidth;
-						int py = screen_y * cellHeight;
+						int py = (int)(screen_y * cellHeight);
 						graphics.FillRectangle(&effectBrush, px, py, cellWidth, cellHeight);
 					}
 				}

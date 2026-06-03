@@ -163,6 +163,12 @@
     <ClInclude Include="RenderManager.h" />
     <ClInclude Include="Singleton.h" />
   </ItemGroup>
+  <ItemGroup>
+    <None Include="..\..\Data\item_config.lua" />
+    <None Include="..\..\Data\map_spawn.bin" />
+    <None Include="..\..\Data\npc_config.lua" />
+    <None Include="..\..\Data\player_config.lua" />
+  </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
   </ImportGroup>
