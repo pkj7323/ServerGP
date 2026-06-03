@@ -1,4 +1,4 @@
-﻿#include "pch.h"
+#include "pch.h"
 #include "RenderManager.h"
 #include "GameManager.h"
 
@@ -29,6 +29,9 @@ RenderManager::~RenderManager()
 		if (_item_images[i]) { delete _item_images[i]; _item_images[i] = nullptr; }
 	}
 	if (_grass_img) { delete _grass_img; _grass_img = nullptr; }
+	if (_oak_sapling_img) { delete _oak_sapling_img; _oak_sapling_img = nullptr; }
+	if (_spruce_sapling_img) { delete _spruce_sapling_img; _spruce_sapling_img = nullptr; }
+	if (_cactus_img) { delete _cactus_img; _cactus_img = nullptr; }
 }
 
 void RenderManager::Release()
@@ -58,6 +61,9 @@ void RenderManager::Release()
 		if (_item_images[i]) { delete _item_images[i]; _item_images[i] = nullptr; }
 	}
 	if (_grass_img) { delete _grass_img; _grass_img = nullptr; }
+	if (_oak_sapling_img) { delete _oak_sapling_img; _oak_sapling_img = nullptr; }
+	if (_spruce_sapling_img) { delete _spruce_sapling_img; _spruce_sapling_img = nullptr; }
+	if (_cactus_img) { delete _cactus_img; _cactus_img = nullptr; }
 }
 
 void RenderManager::Render(HWND hWnd)
@@ -111,8 +117,9 @@ static auto last_time = std::chrono::steady_clock::now();
 	auto& npcs = gm->npcs();
 
 	if (players.contains(my_id)) {
-		left_x = players[my_id].render_x - VIEW_WIDTH / 2.0f;
-		bottom_y = players[my_id].render_y - VIEW_HEIGHT / 2.0f;
+		// 고전 RPG 스타일: 카메라는 실제 타일(x, y) 단위로만 이동하여 그리드 렌더링 유지
+		left_x = static_cast<float>(players[my_id].x - VIEW_WIDTH / 2);
+		bottom_y = static_cast<float>(players[my_id].y - VIEW_HEIGHT / 2);
 		left_x = std::clamp(left_x, 0.0f, (float)(WORLD_WIDTH - VIEW_WIDTH));
 		bottom_y = std::clamp(bottom_y, 0.0f, (float)(WORLD_HEIGHT - VIEW_HEIGHT));
 	}
@@ -129,6 +136,12 @@ static auto last_time = std::chrono::steady_clock::now();
 
 			uint8_t tile_id = gm->get_visual_tile(world_x, world_y);
 			COLORREF color;
+			bool is_oak = false, is_spruce = false, is_cactus = false;
+			
+			if (tile_id == 10) { is_oak = true; tile_id = 1; }
+			else if (tile_id == 11) { is_spruce = true; tile_id = 6; }
+			else if (tile_id == 12) { is_cactus = true; tile_id = 4; }
+
 			switch (tile_id) {
 			case 0: color = RGB(65, 105, 225); break;  // WATER
 			case 1: color = RGB(34, 139, 34); break;   // GRASS
@@ -147,6 +160,14 @@ static auto last_time = std::chrono::steady_clock::now();
 				HBRUSH hBrush = CreateSolidBrush(color);
 				FillRect(memDC, &rect, hBrush);
 				DeleteObject(hBrush);
+			}
+
+			if (is_oak && _oak_sapling_img) {
+				graphics.DrawImage(_oak_sapling_img, (int)rect.left, (int)rect.top, (int)(rect.right - rect.left), (int)(rect.bottom - rect.top));
+			} else if (is_spruce && _spruce_sapling_img) {
+				graphics.DrawImage(_spruce_sapling_img, (int)rect.left, (int)rect.top, (int)(rect.right - rect.left), (int)(rect.bottom - rect.top));
+			} else if (is_cactus && _cactus_img) {
+				graphics.DrawImage(_cactus_img, (int)rect.left, (int)rect.top, (int)(rect.right - rect.left), (int)(rect.bottom - rect.top));
 			}
 		}
 	}

@@ -1,4 +1,4 @@
-﻿import numpy as np
+import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 import os
 
@@ -9,14 +9,17 @@ WORLD_HEIGHT = 2000
 TILE_COLORS = {
     0: [65,  105, 225],  # WATER      (파랑)
     1: [34,  139,  34],  # GRASS      (초록)
-    2: [139,  69,  19],  # DIRT       (갈색)
+    2: [139,  69,  19],  # DIRT       (흙)
     3: [128, 128, 128],  # STONE      (회색)
     4: [238, 214, 175],  # SAND       (모래색)
-    5: [210, 180, 140],  # SANDSTONE  (옅은 모래)
+    5: [210, 180, 140],  # SANDSTONE  (진한 모래)
     6: [255, 250, 250],  # SNOW       (흰색)
     7: [175, 238, 238],  # ICE        (하늘색)
-    8: [101,  67,  33],  # MUD        (진갈색)
+    8: [101,  67,  33],  # MUD        (진흙)
     9: [ 47,  79,  79],  # DEEPSLATE  (짙은 회색)
+    10: [ 10,  80,  10], # OAK TREE   (진한 초록)
+    11: [ 15,  50,  30], # SPRUCE TREE(어두운 청록)
+    12: [ 50, 205,  50], # CACTUS     (라임 초록)
 }
 
 # ── NPC 스폰 색상 ─────────────────────────────────────────────────────────────
@@ -193,9 +196,9 @@ def _draw_legend(img: Image.Image):
 if __name__ == "__main__":
     BIN_DIR = os.path.dirname(os.path.abspath(__file__))
 
-    visual_bin    = os.path.join(BIN_DIR, "map_visual.bin")
-    collision_bin = os.path.join(BIN_DIR, "map_collision.bin")
-    spawn_bin     = os.path.join(BIN_DIR, "map_spawn.bin")
+    visual_bin    = os.path.join(BIN_DIR, "../Data/map_visual.bin")
+    collision_bin = os.path.join(BIN_DIR, "../Data/map_collision.bin")
+    spawn_bin     = os.path.join(BIN_DIR, "../Data/map_spawn.bin")
 
     print("=== Map Visualizer ===")
 

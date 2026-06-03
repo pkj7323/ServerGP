@@ -41,6 +41,9 @@ public:
 		_item_images[6] = new Gdiplus::Image(L"Resource/diamond.png");
 		
 		_grass_img = new Gdiplus::Image(L"Resource/grass.png");
+		_oak_sapling_img = new Gdiplus::Image(L"Resource/oak_sapling.png");
+		_spruce_sapling_img = new Gdiplus::Image(L"Resource/spruce_sapling.png");
+		_cactus_img = new Gdiplus::Image(L"Resource/cactus.png");
 	}
 	~RenderManager();
 	void Release() override;
@@ -59,4 +62,8 @@ private:
 	Gdiplus::Image* _gold_icon;
 	Gdiplus::Image* _item_images[20];
 	Gdiplus::Image* _grass_img;
+
+	Gdiplus::Image* _oak_sapling_img;
+	Gdiplus::Image* _spruce_sapling_img;
+	Gdiplus::Image* _cactus_img;
 };

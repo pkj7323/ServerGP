@@ -250,6 +250,14 @@ Sector sector;
 ArmorConfig g_armor_config;
 PlayerConfig g_player_config;
 
+std::vector<uint8_t> g_server_collision;
+
+bool is_passable(int x, int y) {
+	if (x < 0 || x >= WORLD_WIDTH || y < 0 || y >= WORLD_HEIGHT) return false;
+	if (g_server_collision.empty()) return true; // fail-safe if map isn't loaded
+	return g_server_collision[y * WORLD_WIDTH + x] == 0;
+}
+
 class BaseObject {
 public:
 	int				id_;
@@ -732,13 +740,24 @@ bool SESSION::proccess_packet(unsigned char* buff)
 			player_->_dir_y = dy;
 		}
 
-		if (new_x >= 0 && new_x < WORLD_WIDTH)
+		if (is_passable(new_x, new_y))
 		{
 			player_->x_ = new_x;
-		}
-		if (new_y >= 0 && new_y < WORLD_HEIGHT)
-		{
 			player_->y_ = new_y;
+		}
+		else
+		{
+			// 충돌: 강제 위치 복원(고무줄 현상)
+			S2C_MoveObject res_pkt;
+			res_pkt.size = sizeof(res_pkt);
+			res_pkt.type = S2C_MOVE_OBJECT;
+			res_pkt.object_id = id_;
+			res_pkt.x = player_->x_;
+			res_pkt.y = player_->y_;
+			res_pkt.dir_x = player_->_dir_x;
+			res_pkt.dir_y = player_->_dir_y;
+			res_pkt.move_time = 0;
+			do_send(res_pkt.size, reinterpret_cast<char*>(&res_pkt));
 		}
 		sector.move_object(id_, old_x, old_y, player_->x_, player_->y_); // 섹터 정보 업데이트
 
@@ -1216,12 +1235,23 @@ void npc_initialize()
 	const std::string lua_path  = data_dir + "npc_config.lua";
 	const std::string player_lua = data_dir + "player_config.lua";
 	const std::string spawn_path = data_dir + "map_spawn.bin";
+	const std::string collision_path = data_dir + "map_collision.bin";
 
 	// ── Step 1. Lua에서 메타데이터 로드 ─────────────────────────────
 	std::cout << "[Server] Loading configs..." << std::endl;
 	auto meta_table   = load_npc_config_lua(lua_path.c_str());
 	g_armor_config    = load_armor_config_lua(lua_path.c_str());
 	g_player_config   = load_player_config_lua(player_lua.c_str());
+
+	// ── Step 1.5. 충돌 맵 로드 ─────────────────────────────
+	std::cout << "[Server] Loading map_collision.bin..." << std::endl;
+	std::ifstream coll_file(collision_path, std::ios::binary);
+	if (coll_file) {
+		g_server_collision.resize(WORLD_WIDTH * WORLD_HEIGHT);
+		coll_file.read(reinterpret_cast<char*>(g_server_collision.data()), g_server_collision.size());
+	} else {
+		std::cerr << "[Server][WARNING] Failed to load map_collision.bin!" << std::endl;
+	}
 
 	// ── Step 2. map_spawn.bin에서 스폰 위치 로드 ─────────────────────────────
 	std::cout << "[Server] Loading map_spawn.bin..." << std::endl;
