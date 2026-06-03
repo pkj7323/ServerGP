@@ -39,6 +39,8 @@ public:
 		_item_images[4] = new Gdiplus::Image(L"Resource/iron_ingot.png");
 		_item_images[5] = new Gdiplus::Image(L"Resource/gold_ingot.png");
 		_item_images[6] = new Gdiplus::Image(L"Resource/diamond.png");
+		
+		_grass_img = new Gdiplus::Image(L"Resource/grass.png");
 	}
 	~RenderManager();
 	void Release() override;
@@ -56,4 +58,5 @@ private:
 
 	Gdiplus::Image* _gold_icon;
 	Gdiplus::Image* _item_images[20];
+	Gdiplus::Image* _grass_img;
 };

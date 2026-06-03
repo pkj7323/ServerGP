@@ -1,4 +1,4 @@
-#include "pch.h"
+﻿#include "pch.h"
 #include "RenderManager.h"
 #include "GameManager.h"
 
@@ -28,6 +28,7 @@ RenderManager::~RenderManager()
 	for (int i = 0; i < 20; ++i) {
 		if (_item_images[i]) { delete _item_images[i]; _item_images[i] = nullptr; }
 	}
+	if (_grass_img) { delete _grass_img; _grass_img = nullptr; }
 }
 
 void RenderManager::Release()
@@ -56,6 +57,7 @@ void RenderManager::Release()
 	for (int i = 0; i < 20; ++i) {
 		if (_item_images[i]) { delete _item_images[i]; _item_images[i] = nullptr; }
 	}
+	if (_grass_img) { delete _grass_img; _grass_img = nullptr; }
 }
 
 void RenderManager::Render(HWND hWnd)
@@ -72,7 +74,14 @@ void RenderManager::Render(HWND hWnd)
 	HBITMAP memBitmap = CreateCompatibleBitmap(hdc, width, height);
 	HBITMAP oldBitmap = (HBITMAP)SelectObject(memDC, memBitmap);
 
-	// 배경 (검은색)
+	// --- GDI+ UI Rendering (Graphics instance pulled up for head and tile rendering) ---
+	Gdiplus::Graphics graphics(memDC);
+	
+	// 마인크래프트 특유의 도트(픽셀) 감성을 살리기 위해 NearestNeighbor(근접 보간) 필터 적용!
+	graphics.SetInterpolationMode(Gdiplus::InterpolationModeNearestNeighbor);
+	graphics.SetPixelOffsetMode(Gdiplus::PixelOffsetModeHalf); // 픽셀 어긋남 방지
+
+	// 배경 (검정색)
 	FillRect(memDC, &clientRect, (HBRUSH)GetStockObject(BLACK_BRUSH));
 
 	// 매크로가 없으면 15x15 기준으로 설정
@@ -132,21 +141,18 @@ static auto last_time = std::chrono::steady_clock::now();
 			default: color = RGB(47, 79, 79); break;   // 기본
 			}
 
-			HBRUSH hBrush = CreateSolidBrush(color);
-			FillRect(memDC, &rect, hBrush);
-			DeleteObject(hBrush);
+			if (tile_id == 1 && _grass_img) {
+				graphics.DrawImage(_grass_img, (int)rect.left, (int)rect.top, (int)(rect.right - rect.left), (int)(rect.bottom - rect.top));
+			} else {
+				HBRUSH hBrush = CreateSolidBrush(color);
+				FillRect(memDC, &rect, hBrush);
+				DeleteObject(hBrush);
+			}
 		}
 	}
 	SetBkMode(memDC, TRANSPARENT);
 	SetTextColor(memDC, RGB(255, 255, 255));
 	
-	// --- GDI+ UI Rendering (Graphics instance pulled up for head rendering) ---
-	Gdiplus::Graphics graphics(memDC);
-	
-	// 마인크래프트 특유의 도트(픽셀) 감성을 살리기 위해 NearestNeighbor(근접 보간) 필터링 적용!
-	graphics.SetInterpolationMode(Gdiplus::InterpolationModeNearestNeighbor);
-	graphics.SetPixelOffsetMode(Gdiplus::PixelOffsetModeHalf); // 픽셀 어긋남 방지
-
 	Gdiplus::FontFamily fontFamily(L"Malgun Gothic");
 	Gdiplus::Font font(&fontFamily, 14, Gdiplus::FontStyleBold, Gdiplus::UnitPixel);
 	
