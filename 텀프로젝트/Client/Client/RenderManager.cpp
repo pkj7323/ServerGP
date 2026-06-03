@@ -1,6 +1,34 @@
-#include "pch.h"
+﻿#include "pch.h"
 #include "RenderManager.h"
 #include "GameManager.h"
+
+static void DrawChatBubbles(Gdiplus::Graphics& graphics, Gdiplus::Font& font, float left_x, float bottom_y, int cellWidth, int cellHeight, std::unordered_map<int, Object>& obj_map) {
+	for (auto& [id, obj] : obj_map) {
+		if (obj.chat_msg.empty()) continue;
+		auto now = std::chrono::steady_clock::now();
+		if (std::chrono::duration_cast<std::chrono::seconds>(now - obj.chat_time).count() > 4) {
+			obj.chat_msg.clear(); // Expire after 4 seconds
+			continue;
+		}
+
+		float rel_x = obj.render_x - left_x;
+		float rel_y = obj.render_y - bottom_y;
+		if (rel_x >= 0 && rel_x < VIEW_WIDTH && rel_y >= 0 && rel_y < VIEW_HEIGHT) {
+			float screen_y = (VIEW_HEIGHT - 1.0f - rel_y);
+			int px = (int)(rel_x * cellWidth) + (cellWidth / 2);
+			int py = (int)(screen_y * cellHeight) - 30; // Above head
+
+			Gdiplus::RectF bounds;
+			graphics.MeasureString(obj.chat_msg.c_str(), -1, &font, Gdiplus::PointF(0, 0), &bounds);
+			
+			Gdiplus::SolidBrush bubbleBrush(Gdiplus::Color(220, 255, 255, 255));
+			Gdiplus::SolidBrush textBrush(Gdiplus::Color(255, 0, 0, 0));
+			
+			graphics.FillRectangle(&bubbleBrush, px - bounds.Width / 2 - 5, py - bounds.Height - 5, bounds.Width + 10, bounds.Height + 10);
+			graphics.DrawString(obj.chat_msg.c_str(), -1, &font, Gdiplus::PointF(px - bounds.Width / 2, py - bounds.Height), &textBrush);
+		}
+	}
+}
 
 RenderManager::~RenderManager()
 {
@@ -99,7 +127,7 @@ static auto last_time = std::chrono::steady_clock::now();
 	auto now = std::chrono::steady_clock::now();
 	float dt = std::chrono::duration<float>(now - last_time).count();
 	last_time = now;
-	if (dt > 0.1f) dt = 0.1f; // cap dt
+	dt = std::min(dt, 0.1f); // cap dt
 
 	float speed = 10.0f; // interpolation speed
 	for (auto& [id, player] : gm->players()) {
@@ -261,35 +289,8 @@ static auto last_time = std::chrono::steady_clock::now();
 		Gdiplus::SolidBrush blackTransBrush(Gdiplus::Color(150, 0, 0, 0));
 
 		// 4.5 Draw In-Game Chat Bubbles
-		auto draw_bubble = [&](auto& obj_map) {
-			for (auto& [id, obj] : obj_map) {
-				if (obj.chat_msg.empty()) continue;
-				auto now = std::chrono::steady_clock::now();
-				if (std::chrono::duration_cast<std::chrono::seconds>(now - obj.chat_time).count() > 4) {
-					obj.chat_msg.clear(); // Expire after 4 seconds
-					continue;
-				}
-
-				float rel_x = obj.render_x - left_x;
-				float rel_y = obj.render_y - bottom_y;
-				if (rel_x >= 0 && rel_x < VIEW_WIDTH && rel_y >= 0 && rel_y < VIEW_HEIGHT) {
-					float screen_y = (VIEW_HEIGHT - 1.0f - rel_y);
-					int px = (int)(rel_x * cellWidth) + (cellWidth / 2);
-					int py = (int)(screen_y * cellHeight) - 30; // Above head
-
-					Gdiplus::RectF bounds;
-					graphics.MeasureString(obj.chat_msg.c_str(), -1, &font, Gdiplus::PointF(0, 0), &bounds);
-					
-					Gdiplus::SolidBrush bubbleBrush(Gdiplus::Color(220, 255, 255, 255));
-					Gdiplus::SolidBrush textBrush(Gdiplus::Color(255, 0, 0, 0));
-					
-					graphics.FillRectangle(&bubbleBrush, px - bounds.Width / 2 - 5, py - bounds.Height - 5, bounds.Width + 10, bounds.Height + 10);
-					graphics.DrawString(obj.chat_msg.c_str(), -1, &font, Gdiplus::PointF(px - bounds.Width / 2, py - bounds.Height), &textBrush);
-				}
-			}
-		};
-		draw_bubble(players);
-		draw_bubble(npcs);
+		DrawChatBubbles(graphics, font, left_x, bottom_y, cellWidth, cellHeight, players);
+		DrawChatBubbles(graphics, font, left_x, bottom_y, cellWidth, cellHeight, npcs);
 
 		// 4.6 Draw Helmets for Players
 		for (auto& [id, player] : players) {

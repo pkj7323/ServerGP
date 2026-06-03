@@ -552,11 +552,11 @@ public:
 		}
 
 		bool has_player_nearby = do_random_move();
-		if (id_ == make_npc_id(20000))
+		/*if (id_ == make_npc_id(20000))
 		{
 			auto delay = std::chrono::system_clock::now() - last_move_timestamp_;
 			std::cout << "NPC " << id_ << " moved. Time since last move: " << std::chrono::duration_cast<std::chrono::milliseconds>(delay).count() << " ms\n";
-		}
+		}*/
 
 		last_move_timestamp_ = std::chrono::system_clock::now();
 		return has_player_nearby;
@@ -1598,9 +1598,9 @@ void worker_thread()
 					npc->wake_up(); // 주변 플레이어 감지 및 이동 타이머 시작
 					
 					// 리스폰 확인용 로그 및 채팅 브로드캐스트
-					std::cout << "[Respawn] NPC ID: " << npc->id_ << " respawned at (" << npc->x_ << ", " << npc->y_ << ")\n";
+					//std::cout << "[Respawn] NPC ID: " << npc->id_ << " respawned at (" << npc->x_ << ", " << npc->y_ << ")\n";
 
-					S2C_ChatMessage chat_pkt;
+					/*S2C_ChatMessage chat_pkt;
 					chat_pkt.size = sizeof(chat_pkt);
 					chat_pkt.type = S2C_CHAT_MESSAGE;
 					chat_pkt.object_id = npc->id_;
@@ -1613,7 +1613,7 @@ void worker_thread()
 								s->do_send(chat_pkt.size, reinterpret_cast<char*>(&chat_pkt));
 							}
 						}
-					}
+					}*/
 				}
 			}
 			break;
