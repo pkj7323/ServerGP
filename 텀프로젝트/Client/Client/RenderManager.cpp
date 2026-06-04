@@ -155,8 +155,8 @@ static auto last_time = std::chrono::steady_clock::now();
 	// 1. 지형 렌더링
 	for (int y = 0; y < VIEW_HEIGHT; ++y) {
 		for (int x = 0; x < VIEW_WIDTH; ++x) {
-			int world_x = left_x + x;
-			int world_y = bottom_y + y; // y=0이 화면 밑바닥
+			int world_x = static_cast<int>(left_x) + x;
+			int world_y = static_cast<int>(bottom_y) + y; // y=0이 화면 밑바닥
 
 			// GDI 렌더링을 위해 모니터 좌표계로 변환 (상하 반전)
 			int screen_y = (VIEW_HEIGHT - 1 - y);
@@ -230,9 +230,18 @@ static auto last_time = std::chrono::steady_clock::now();
 				DeleteObject(hBrush);
 			}
 
-			// --- 이름 출력 로직 추가 ---
+			// --- 이름 출력 로직 추가 (그림자 포함) ---
 			std::wstring wName(npc.name.begin(), npc.name.end());
-			TextOut(memDC, px, py - 20, wName.c_str(), (int)wName.length());
+			Gdiplus::SolidBrush nameBrush(Gdiplus::Color(255, 255, 255, 255));
+			Gdiplus::SolidBrush shadowBrush(Gdiplus::Color(255, 0, 0, 0));
+			graphics.DrawString(wName.c_str(), -1, &font, Gdiplus::PointF((float)(px + 1), (float)(py - 19)), &shadowBrush);
+			graphics.DrawString(wName.c_str(), -1, &font, Gdiplus::PointF((float)px, (float)(py - 20)), &nameBrush);
+
+			// --- 체력(HP) 출력 로직 ---
+			std::wstring wHp = L"HP: " + std::to_wstring(npc.hp) + L"/" + std::to_wstring(npc.max_hp);
+			Gdiplus::SolidBrush hpBrush(Gdiplus::Color(255, 255, 100, 100)); // 연한 빨간색
+			graphics.DrawString(wHp.c_str(), -1, &font, Gdiplus::PointF((float)(px + 1), (float)(py - 34)), &shadowBrush);
+			graphics.DrawString(wHp.c_str(), -1, &font, Gdiplus::PointF((float)px, (float)(py - 35)), &hpBrush);
 		}
 	}
 
@@ -261,9 +270,18 @@ static auto last_time = std::chrono::steady_clock::now();
 				DeleteObject(hBrush);
 			}
 
-			// --- 이름 출력 로직 추가 ---
+			// --- 이름 출력 로직 추가 (그림자 포함) ---
 			std::wstring wName(player.name.begin(), player.name.end());
-			TextOut(memDC, px, py - 20, wName.c_str(), (int)wName.length());
+			Gdiplus::SolidBrush nameBrush(Gdiplus::Color(255, 255, 255, 255));
+			Gdiplus::SolidBrush shadowBrush(Gdiplus::Color(255, 0, 0, 0));
+			graphics.DrawString(wName.c_str(), -1, &font, Gdiplus::PointF((float)(px + 1), (float)(py - 19)), &shadowBrush);
+			graphics.DrawString(wName.c_str(), -1, &font, Gdiplus::PointF((float)px, (float)(py - 20)), &nameBrush);
+
+			// --- 체력(HP) 출력 로직 ---
+			std::wstring wHp = L"HP: " + std::to_wstring(player.hp) + L"/" + std::to_wstring(player.max_hp);
+			Gdiplus::SolidBrush hpBrush(Gdiplus::Color(255, 100, 255, 100)); // 연한 초록색
+			graphics.DrawString(wHp.c_str(), -1, &font, Gdiplus::PointF((float)(px + 1), (float)(py - 34)), &shadowBrush);
+			graphics.DrawString(wHp.c_str(), -1, &font, Gdiplus::PointF((float)px, (float)(py - 35)), &hpBrush);
 		}
 	}
 
@@ -291,6 +309,25 @@ static auto last_time = std::chrono::steady_clock::now();
 		// 4.5 Draw In-Game Chat Bubbles
 		DrawChatBubbles(graphics, font, left_x, bottom_y, cellWidth, cellHeight, players);
 		DrawChatBubbles(graphics, font, left_x, bottom_y, cellWidth, cellHeight, npcs);
+
+		// 4.5.5 Draw AGGRO indicators on NPC heads
+		for (auto& [id, npc] : npcs) {
+			if (npc.npc_state != 2) continue; // 2 = NpcState::AGGRO
+			float rel_x = npc.render_x - left_x;
+			float rel_y = npc.render_y - bottom_y;
+			if (rel_x >= 0 && rel_x < VIEW_WIDTH && rel_y >= 0 && rel_y < VIEW_HEIGHT) {
+				float screen_y = (VIEW_HEIGHT - 1.0f - rel_y);
+				int px = (int)(rel_x * cellWidth) + cellWidth / 2;
+				int py = (int)(screen_y * cellHeight) - 28;
+				Gdiplus::Font aggroFont(&fontFamily, 14, Gdiplus::FontStyleBold, Gdiplus::UnitPixel);
+				Gdiplus::SolidBrush aggroBrush(Gdiplus::Color(255, 255, 50, 50));
+				Gdiplus::SolidBrush shadowBrush(Gdiplus::Color(200, 0, 0, 0));
+				// 그림자
+				graphics.DrawString(L"!", -1, &aggroFont, Gdiplus::PointF((float)(px - 3), (float)(py + 1)), &shadowBrush);
+				// 느낌표
+				graphics.DrawString(L"!", -1, &aggroFont, Gdiplus::PointF((float)(px - 4), (float)(py)), &aggroBrush);
+			}
+		}
 
 		// 4.6 Draw Helmets for Players
 		for (auto& [id, player] : players) {
@@ -347,13 +384,19 @@ static auto last_time = std::chrono::steady_clock::now();
 		auto& effects = gm->attack_effects();
 		now = std::chrono::steady_clock::now();
 		for (auto it = effects.begin(); it != effects.end(); ) {
-			int elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - it->start_time).count();
+			int elapsed = static_cast<int>(std::chrono::duration_cast<std::chrono::milliseconds>(now - it->start_time).count());
 			if (elapsed > 300) {
 				it = effects.erase(it);
 			} else {
 				short dx = it->dx;
 				short dy = it->dy;
-				Gdiplus::SolidBrush effectBrush(Gdiplus::Color(100, 255, 0, 0));
+				
+				// 플레이어는 하늘색, NPC는 빨간색 공격 범위 표시
+				Gdiplus::SolidBrush effectBrush(
+					gm->players().contains(it->id) ? 
+					Gdiplus::Color(100, 50, 200, 255) : 
+					Gdiplus::Color(100, 255, 0, 0)
+				);
 
 				if (it->attack_type == 1) { // Half-circle AoE
 					int radius = 1 + it->tier;
@@ -361,9 +404,9 @@ static auto last_time = std::chrono::steady_clock::now();
 					float py = (VIEW_HEIGHT - 1.0f - (it->y - bottom_y)) * cellHeight;
 					
 					// Center of the player cell
-					float cx = px + cellWidth / 2.0f;
-					float cy = py + cellHeight / 2.0f;
-					float r_px = radius * cellWidth; // Approximation for pixel radius
+					float cx = px + (float)cellWidth / 2.0f;
+					float cy = py + (float)cellHeight / 2.0f;
+					float r_px = static_cast<float>(radius * cellWidth); // Approximation for pixel radius
 
 					// Determine angle based on direction
 					float startAngle = 0.0f;
@@ -389,6 +432,45 @@ static auto last_time = std::chrono::steady_clock::now();
 							graphics.DrawImage(sword_img, 0, -32, 32, 32);
 							
 							graphics.ResetTransform();
+						}
+					}
+				} else if (it->attack_type == 2) { // 5-tile linear range attack (Skeleton)
+					std::vector<std::pair<int, int>> cells;
+					if (dx != 0) {
+						int sign = dx > 0 ? 1 : -1;
+						for (int r = 1; r <= 5; ++r) cells.emplace_back(it->x + sign * r, it->y);
+					} else if (dy != 0) {
+						int sign = dy > 0 ? 1 : -1;
+						for (int r = 1; r <= 5; ++r) cells.emplace_back(it->x, it->y + sign * r);
+					} else {
+						cells.emplace_back(it->x, it->y - 1);
+					}
+					
+					for(auto& cell : cells) {
+						int rel_x = cell.first - static_cast<int>(left_x);
+						int rel_y = cell.second - static_cast<int>(bottom_y);
+						if (rel_x >= 0 && rel_x < VIEW_WIDTH && rel_y >= 0 && rel_y < VIEW_HEIGHT) {
+							float screen_y = (VIEW_HEIGHT - 1.0f - rel_y);
+							int px = rel_x * cellWidth;
+							int py = static_cast<int>(screen_y * cellHeight);
+							graphics.FillRectangle(&effectBrush, px, py, cellWidth, cellHeight);
+						}
+					}
+				} else if (it->attack_type == 3) { // 5x5 explosion AoE (Creeper)
+					std::vector<std::pair<int, int>> cells;
+					for (int r = -2; r <= 2; ++r) {
+						for (int c = -2; c <= 2; ++c) {
+							cells.emplace_back(it->x + c, it->y + r);
+						}
+					}
+					for(auto& cell : cells) {
+						int rel_x = cell.first - static_cast<int>(left_x);
+						int rel_y = cell.second - static_cast<int>(bottom_y);
+						if (rel_x >= 0 && rel_x < VIEW_WIDTH && rel_y >= 0 && rel_y < VIEW_HEIGHT) {
+							float screen_y = (VIEW_HEIGHT - 1.0f - rel_y);
+							int px = rel_x * cellWidth;
+							int py = static_cast<int>(screen_y * cellHeight);
+							graphics.FillRectangle(&effectBrush, px, py, cellWidth, cellHeight);
 						}
 					}
 				} else { // Normal rectangle attack
@@ -420,12 +502,12 @@ static auto last_time = std::chrono::steady_clock::now();
 					}
 
 					for(auto& cell : cells) {
-						int rel_x = cell.first - left_x;
-						int rel_y = cell.second - bottom_y;
+						int rel_x = cell.first - static_cast<int>(left_x);
+						int rel_y = cell.second - static_cast<int>(bottom_y);
 						if (rel_x >= 0 && rel_x < VIEW_WIDTH && rel_y >= 0 && rel_y < VIEW_HEIGHT) {
 							float screen_y = (VIEW_HEIGHT - 1.0f - rel_y);
 							int px = rel_x * cellWidth;
-							int py = (int)(screen_y * cellHeight);
+							int py = static_cast<int>(screen_y * cellHeight);
 							graphics.FillRectangle(&effectBrush, px, py, cellWidth, cellHeight);
 						}
 					}
@@ -562,7 +644,7 @@ static auto last_time = std::chrono::steady_clock::now();
 			if (_health_potion_img) graphics.DrawImage(_health_potion_img, startX + 4, startY + 4, 32, 32);
 			graphics.DrawString(L"1", -1, &font, Gdiplus::PointF(static_cast<float>(startX), static_cast<float>(startY - 15)), &whiteBrush);
 
-			int potionElapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - gm->last_potion_use()).count();
+			int potionElapsed = (int)std::chrono::duration_cast<std::chrono::milliseconds>(now - gm->last_potion_use()).count();
 			if (potionElapsed < 5000) {
 				graphics.FillRectangle(&darkTransBrush, startX, startY, qsWidth, qsHeight);
 				float remain = (5000 - potionElapsed) / 1000.0f;
@@ -577,7 +659,7 @@ static auto last_time = std::chrono::steady_clock::now();
 			if (_blaze_powder_img) graphics.DrawImage(_blaze_powder_img, slot2X + 4, startY + 4, 32, 32);
 			graphics.DrawString(L"2", -1, &font, Gdiplus::PointF(static_cast<float>(slot2X), static_cast<float>(startY - 15)), &whiteBrush);
 
-			int skillElapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - gm->last_skill_use()).count();
+			int skillElapsed = (int)std::chrono::duration_cast<std::chrono::milliseconds>(now - gm->last_skill_use()).count();
 			if (skillElapsed < 15000) {
 				graphics.FillRectangle(&darkTransBrush, slot2X, startY, qsWidth, qsHeight);
 				float remain = (15000 - skillElapsed) / 1000.0f;
@@ -588,7 +670,7 @@ static auto last_time = std::chrono::steady_clock::now();
 
 			// Buff Gauge
 			if (now < gm->buff_end_time()) {
-				int buffRemain = std::chrono::duration_cast<std::chrono::milliseconds>(gm->buff_end_time() - now).count();
+				int buffRemain = static_cast<int>(std::chrono::duration_cast<std::chrono::milliseconds>(gm->buff_end_time() - now).count());
 				float buffSec = buffRemain / 1000.0f;
 				wchar_t buffText[64];
 				swprintf(buffText, 64, L"스킬 유지: %.1f초", buffSec);

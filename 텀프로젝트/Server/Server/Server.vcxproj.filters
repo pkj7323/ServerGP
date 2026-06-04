@@ -19,6 +19,9 @@
     <Filter Include="lua">
       <UniqueIdentifier>{1d18ee91-d38c-43df-901c-621100c11aaf}</UniqueIdentifier>
     </Filter>
+    <Filter Include="NPC AI">
+      <UniqueIdentifier>{c976aa16-4067-4f4b-81c9-ec1041552a36}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="main.cpp">
@@ -47,6 +50,9 @@
     <ClInclude Include="lua-5.5.0\include\lualib.h">
       <Filter>lua</Filter>
     </ClInclude>
+    <ClInclude Include="npc_ai_manager.h">
+      <Filter>헤더 파일</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <None Include="packages.config" />
@@ -61,6 +67,21 @@
     </None>
     <None Include="..\..\Data\player_config.lua">
       <Filter>Data</Filter>
+    </None>
+    <None Include="ai\creeper_ai.lua">
+      <Filter>NPC AI</Filter>
+    </None>
+    <None Include="ai\enderman_ai.lua">
+      <Filter>NPC AI</Filter>
+    </None>
+    <None Include="ai\iron_golem_ai.lua">
+      <Filter>NPC AI</Filter>
+    </None>
+    <None Include="ai\skeleton_ai.lua">
+      <Filter>NPC AI</Filter>
+    </None>
+    <None Include="ai\zombie_ai.lua">
+      <Filter>NPC AI</Filter>
     </None>
   </ItemGroup>
 </Project>

@@ -36,6 +36,17 @@ enum PACKET_TYPE {
 	S2C_STATUS_CHANGE,	//	Server to Client: Update player or NPC status (e.g., health, buffs)	
 	S2C_ATTACK_EFFECT,	//	Server to Client: Show attack animation/range
 	S2C_INVENTORY_SYNC,	//  Server to Client: Synchronize player inventory
+	S2C_NPC_STATE_CHANGE,	// Server to Client: NPC state changed (IDLE/PATROL/AGGRO etc)
+};
+
+// NPC AI 상태 - 클라이언트와 서버가 공유하는 enum
+enum class NpcState : char {
+	IDLE     = 0,  // 비활성 (플레이어 없음)
+	PATROL   = 1,  // 배회 중
+	AGGRO    = 2,  // 플레이어 추격/공격 중
+	ATTACKING = 3, // 공격 중 (예약)
+	FLEEING = 4,   // 도주 중 (크리퍼 제외)
+	DEAD     = 5,  // 사망
 };
 
 #pragma pack(push, 1) // Ensure no padding between struct members
@@ -128,6 +139,7 @@ struct S2C_AddObject {
 	char weapon_tier;
 	short dir_x;
 	short dir_y;
+	char npc_state; // NpcState enum value (0=IDLE, 2=AGGRO, etc)
 };
 
 struct S2C_RemoveObject {
@@ -191,6 +203,14 @@ struct S2C_InventorySync {
 	int gold;
 	int item_count;
 	ItemSlot items[MAX_INVENTORY_SLOTS];
+};
+
+struct S2C_NpcStateChange {
+	unsigned char size;
+	PACKET_TYPE   type;
+	int object_id;
+	char npc_state; // NpcState enum value
+	int target_id;  // aggro target (-1 if none)
 };
 
 #pragma pack(pop) // Restore default packing

@@ -1,4 +1,4 @@
-#include "pch.h"
+﻿#include "pch.h"
 #include "NetworkManager.h"
 
 #include "common.h"
@@ -121,7 +121,7 @@ void NetworkManager::process_packet(char* ptr)
 	case S2C_AVATAR_INFO: {
 		S2C_AvatarInfo* p = reinterpret_cast<S2C_AvatarInfo*>(ptr);
 		gm->set_my_id(p->playerId);
-		gm->players()[p->playerId] = { p->playerId, gm->username(), p->x, p->y, (float)p->x, (float)p->y, p->armor_tier, p->weapon_tier, p->dir_x, p->dir_y };
+		gm->players()[p->playerId] = { p->playerId, gm->username(), p->x, p->y, (float)p->x, (float)p->y, p->armor_tier, p->weapon_tier, p->dir_x, p->dir_y, 0, p->hp, p->max_hp };
 		std::cout << "Avatar Info: ID=" << p->playerId << " at (" << p->x << ", " << p->y << "), ArmorTier=" << (int)p->armor_tier << "\n";
 		break;
 	}
@@ -129,11 +129,11 @@ void NetworkManager::process_packet(char* ptr)
 		S2C_AddObject* p = reinterpret_cast<S2C_AddObject*>(ptr);
 		if (is_npc_id(p->object_id))
 		{
-			gm->npcs().emplace(p->object_id, Object{ p->object_id, p->obj_name, p->x, p->y, (float)p->x, (float)p->y, p->armor_tier, p->weapon_tier, p->dir_x, p->dir_y, p->visual_id });
+			gm->npcs().emplace(p->object_id, Object{ p->object_id, p->obj_name, p->x, p->y, (float)p->x, (float)p->y, p->armor_tier, p->weapon_tier, p->dir_x, p->dir_y, p->visual_id, p->hp, p->max_hp, L"", std::chrono::steady_clock::now(), p->npc_state });
 		}
 		else if (p->object_id == gm->my_id()) break;
 		else {
-			gm->players().emplace(p->object_id, Object{ p->object_id, p->obj_name, p->x, p->y, (float)p->x, (float)p->y, p->armor_tier, p->weapon_tier, p->dir_x, p->dir_y, p->visual_id });
+			gm->players().emplace(p->object_id, Object{ p->object_id, p->obj_name, p->x, p->y, (float)p->x, (float)p->y, p->armor_tier, p->weapon_tier, p->dir_x, p->dir_y, p->visual_id, p->hp, p->max_hp });
 			std::cout << "Add Player: ID=" << p->object_id << ", Name=" << p->obj_name << " at (" << p->x << ", " << p->y << "), ArmorTier=" << (int)p->armor_tier << "\n";
 		}
 		break;
@@ -152,10 +152,10 @@ void NetworkManager::process_packet(char* ptr)
 		else if (gm->players().contains(p->object_id)) {
 			// 고무줄(서버 강제 동기화) 처리: 만약 나라면 render_x/y 도 순간이동(서버가 거절한 이동이므로)
 			if (p->object_id == gm->my_id()) {
-				float distSq = (gm->players()[p->object_id].x - p->x)*(gm->players()[p->object_id].x - p->x) + (gm->players()[p->object_id].y - p->y)*(gm->players()[p->object_id].y - p->y);
+				float distSq = static_cast<float>(gm->players()[p->object_id].x - p->x)*(gm->players()[p->object_id].x - p->x) + (gm->players()[p->object_id].y - p->y)*(gm->players()[p->object_id].y - p->y);
 				if (distSq > 1.0f) {
-					gm->players()[p->object_id].render_x = (float)p->x;
-					gm->players()[p->object_id].render_y = (float)p->y;
+					gm->players()[p->object_id].render_x = static_cast<float>(p->x);
+					gm->players()[p->object_id].render_y = static_cast<float>(p->y);
 				}
 			}
 			
@@ -229,10 +229,14 @@ void NetworkManager::process_packet(char* ptr)
 		if (gm->players().contains(p->object_id)) {
 			gm->players()[p->object_id].armor_tier = p->armor_tier;
 			gm->players()[p->object_id].weapon_tier = p->weapon_tier;
+			gm->players()[p->object_id].hp = p->hp;
+			gm->players()[p->object_id].max_hp = p->max_hp;
 		}
 		else if (gm->npcs().contains(p->object_id)) {
 			gm->npcs()[p->object_id].armor_tier = p->armor_tier;
 			gm->npcs()[p->object_id].weapon_tier = p->weapon_tier;
+			gm->npcs()[p->object_id].hp = p->hp;
+			gm->npcs()[p->object_id].max_hp = p->max_hp;
 		}
 		break;
 	}
@@ -245,6 +249,16 @@ void NetworkManager::process_packet(char* ptr)
 			gm->my_inventory()[p->items[i].item_id] = p->items[i].count;
 		}
 		std::cout << "Inventory Sync: Gold=" << p->gold << " Items=" << p->item_count << "\n";
+		break;
+	}
+	case S2C_NPC_STATE_CHANGE:
+	{
+		S2C_NpcStateChange* p = reinterpret_cast<S2C_NpcStateChange*>(ptr);
+		auto& npcs = gm->npcs();
+		auto it = npcs.find(p->object_id);
+		if (it != npcs.end()) {
+			it->second.npc_state = p->npc_state;
+		}
 		break;
 	}
 	default:

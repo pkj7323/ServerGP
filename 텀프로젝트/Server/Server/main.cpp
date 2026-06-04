@@ -17,6 +17,7 @@
 
 #include "Protocol.h"
 #include "npc_loader.h"
+#include "npc_ai_manager.h"
 #include <tbb/concurrent_unordered_map.h>
 #include <unordered_set>
 #include <valarray>
@@ -307,6 +308,34 @@ public:
 		if (_armor >= g_armor_config.copper) return 1;
 		return 0;
 	}
+
+	int get_defense() const {
+		char tier = get_armor_tier();
+		switch (tier) {
+			case 1: return 5;
+			case 2: return 10;
+			case 3: return 20;
+			case 4: return 30;
+			default: return 0;
+		}
+	}
+
+	void update_max_hp() {
+		char tier = get_armor_tier();
+		int new_max = 100;
+		switch (tier) {
+			case 1: new_max = 150; break;
+			case 2: new_max = 200; break;
+			case 3: new_max = 300; break;
+			case 4: new_max = 500; break;
+		}
+		if (new_max != _maxHp) {
+			// 체력 비율 유지
+			float ratio = (float)_hp / _maxHp;
+			_maxHp = new_max;
+			_hp = (int)(_maxHp * ratio);
+		}
+	}
 };
 
 
@@ -441,8 +470,8 @@ public:
 		info_packet.weapon_tier = player_->_weapon_tier;
 		info_packet.dir_x = player_->_dir_x;
 		info_packet.dir_y = player_->_dir_y;
-		info_packet.hp = 100;
-		info_packet.max_hp = 100;
+		info_packet.hp = player_->_hp;
+		info_packet.max_hp = player_->_maxHp;
 		info_packet.exp = 0;
 		info_packet.level = 1;
 		do_send(sizeof(S2C_AvatarInfo), reinterpret_cast<char*>(&info_packet));
@@ -517,6 +546,9 @@ public:
 	int                _attack   = 0;
 	int                _dropItem = 0;
 	int                _dropGold = 0;
+	// AI 상태
+	NpcState _aiState   = NpcState::IDLE;
+	int      _aggroTarget = -1;  // 어그로 중인 플레이어 ID
 public:
 	NPC() : BaseObject(), last_move_timestamp_(std::chrono::system_clock::now()), last_hit_time_(std::chrono::system_clock::now()) {}
 	std::chrono::time_point<std::chrono::system_clock> last_move_timestamp_; // NPC의 마지막 이동 시간 기록
@@ -525,14 +557,25 @@ public:
 	int16_t initial_y_ = 0;
 	void heartbeat()
 	{
-		do_random_move();
+		do_ai();
 	}
-	bool do_timer_move()
+	int do_timer_move()
 	{
 		auto now = std::chrono::system_clock::now();
 		if (_hp < _maxHp && std::chrono::duration_cast<std::chrono::seconds>(now - last_hit_time_).count() >= 5) {
 			_hp += _maxHp / 10;
 			_hp = std::min(_hp, _maxHp);
+
+			S2C_StatusChange stat;
+			stat.size       = sizeof(stat);
+			stat.type       = S2C_STATUS_CHANGE;
+			stat.object_id  = id_;
+			stat.hp         = _hp;
+			stat.max_hp     = _maxHp;
+			stat.exp        = _exp;
+			stat.level      = _level;
+			stat.armor_tier = 0;
+			stat.weapon_tier = 0;
 
 			S2C_ChatMessage chat_pkt;
 			chat_pkt.size = sizeof(chat_pkt);
@@ -545,13 +588,14 @@ public:
 				if (!is_npc_id(pid)) {
 					std::shared_ptr<SESSION> s = clients[pid].load();
 					if (s && s->state_ == client_state::playing) {
+						s->do_send(stat.size, reinterpret_cast<char*>(&stat));
 						s->do_send(chat_pkt.size, reinterpret_cast<char*>(&chat_pkt));
 					}
 				}
 			}
 		}
 
-		bool has_player_nearby = do_random_move();
+		int delay_ms = do_ai();
 		/*if (id_ == make_npc_id(20000))
 		{
 			auto delay = std::chrono::system_clock::now() - last_move_timestamp_;
@@ -559,88 +603,307 @@ public:
 		}*/
 
 		last_move_timestamp_ = std::chrono::system_clock::now();
-		return has_player_nearby;
+		return delay_ms;
 	}
-	bool do_random_move()
+	// ── 주변에서 가장 가까운 플레이어 찾기 ────────────────────────────────────────────
+	std::pair<int, int> find_nearest_player() const
 	{
+		int best_id = -1;
+		int best_dist = 99999;
+		for (auto pid : sector.get_objects_nearby_sector(x_, y_)) {
+			if (is_npc_id(pid)) continue;
+			std::shared_ptr<SESSION> s = clients[pid].load();
+			if (!s || s->state_ != client_state::playing) continue;
+			int d = std::abs(x_ - s->player_->x_) + std::abs(y_ - s->player_->y_);
+			if (d < best_dist) { best_dist = d; best_id = pid; }
+		}
+		return { best_id, best_dist };
+	}
+
+	// ── NpcState 변경 브로드캐스트 ────────────────────────────────────────
+	void broadcast_state_change(NpcState new_state) {
+		if (_aiState == new_state) return;
+		_aiState = new_state;
+		S2C_NpcStateChange pkt;
+		pkt.size      = sizeof(pkt);
+		pkt.type      = S2C_NPC_STATE_CHANGE;
+		pkt.object_id = id_;
+		pkt.npc_state = static_cast<char>(new_state);
+		pkt.target_id = _aggroTarget;
+		for (auto pid : sector.get_objects_nearby_sector(x_, y_)) {
+			if (is_npc_id(pid)) continue;
+			std::shared_ptr<SESSION> s = clients[pid].load();
+			if (s && s->state_ == client_state::playing)
+				s->do_send(pkt.size, reinterpret_cast<char*>(&pkt));
+		}
+	}
+
+	// ── 실제 이동 실행 ─────────
+	// 반환값: 다음 타이머까지의 딜레이(ms). 0이면 끄기(Sleep).
+	int run_ai_tick() {
+		// 1. 인접 플레이어 스냅샷
 		std::unordered_set<int> old_vl;
-		for (auto id : sector.get_objects_nearby_sector(x_, y_))
-		{
-			if (is_npc_id(id)) continue; // NPCs don't need to be tracked in visible_players for this example
-			std::shared_ptr<SESSION> s = clients[id].load();
+		for (auto pid : sector.get_objects_nearby_sector(x_, y_)) {
+			if (is_npc_id(pid)) continue;
+			std::shared_ptr<SESSION> s = clients[pid].load();
 			if (!s || s->state_ != client_state::playing) continue;
-			old_vl.insert(id);
+			old_vl.insert(pid);
 		}
 
-		int old_x = x_;
-		int old_y = y_;
-		switch (rand() % 4) {
-		case 0: if (x_ < (WORLD_WIDTH - 1)) x_++; break;
-		case 1: if (x_ > 0) x_--; break;
-		case 2: if (y_ < (WORLD_HEIGHT - 1)) y_++; break;
-		case 3:if (y_ > 0) y_--; break;
-		}
+		// 2. 어그로 타겟 갱신 (on_hit로 바뀌면 유지)
+		auto [nearest_id, nearest_dist] = find_nearest_player();
+		if (_aggroTarget == -1 || nearest_id == -1) _aggroTarget = nearest_id;
 
-
-		sector.move_object(id_, old_x, old_y, x_, y_);
-		std::unordered_set<int> new_vl;
-		for (auto id : sector.get_objects_nearby_sector(x_, y_))
-		{
-			if (is_npc_id(id)) continue; // NPCs don't need to be tracked in visible_players for this example
-			std::shared_ptr<SESSION> s = clients[id].load();
-			if (!s || s->state_ != client_state::playing) continue;
-			new_vl.insert(id);
-		}
-
-		for (auto& id : new_vl)
-		{
-			if (!old_vl.contains(id))
-			{
-				std::shared_ptr<SESSION> s = clients[id].load();
-				if (s) s->send_add_player(id_);
+		// 3. Lua AI 컨텍스트 구성
+		NpcAiContext ctx;
+		ctx.self_id       = id_;
+		ctx.self_x        = x_;
+		ctx.self_y        = y_;
+		ctx.self_hp       = _hp;
+		ctx.self_max_hp   = _maxHp;
+		ctx.initial_x     = initial_x_;
+		ctx.initial_y     = initial_y_;
+		ctx.current_state = static_cast<int>(_aiState);
+		ctx.target_id     = _aggroTarget;
+		if (_aggroTarget != -1) {
+			std::shared_ptr<SESSION> s = clients[_aggroTarget].load();
+			if (s && s->player_) {
+				ctx.target_x = s->player_->x_;
+				ctx.target_y = s->player_->y_;
+				ctx.dist = std::abs(x_ - ctx.target_x) + std::abs(y_ - ctx.target_y);
+			} else {
+				_aggroTarget = nearest_id;
+				ctx.target_id = nearest_id;
+				ctx.dist = nearest_dist;
 			}
-			else
-			{
-				std::shared_ptr<SESSION> s = clients[id].load();
-				if (s && s->state_ == client_state::playing)
-				{
-					s->send_move_packet(id_, MOVE_COOL_TIME);
+		} else {
+			ctx.dist = nearest_dist;
+		}
+
+		// 4. Lua on_timer 호용
+		NpcAction action = NpcAiManager::call_on_timer(static_cast<int>(_npcType), ctx);
+
+		// 5. 상태 변경 브로드캐스드
+		broadcast_state_change(static_cast<NpcState>(action.new_state));
+
+		// 6. 액션 실행
+		int old_x = x_, old_y = y_;
+
+		switch (action.type) {
+		case NpcActionType::MOVE: {
+			// 엔더맨 텔레포트: dx/dy가 1보다 클 수 있음
+			int step_x = (action.dx != 0) ? (action.dx > 0 ? 1 : -1) : 0;
+			int step_y = (action.dy != 0) ? (action.dy > 0 ? 1 : -1) : 0;
+			int steps  = std::max(std::abs(action.dx), std::abs(action.dy));
+			steps = std::min(steps, 5); // 텔레포트 최대 5칸
+			for (int s = 0; s < steps; ++s) {
+				int nx = x_ + step_x;
+				int ny = y_ + step_y;
+				if (is_passable(nx, ny)) { x_ = nx; y_ = ny; }
+				else break;
+			}
+			break;
+		}
+		case NpcActionType::MELEE_ATTACK: {
+			if (action.target_id >= 0) {
+				std::shared_ptr<SESSION> s = clients[action.target_id].load();
+				if (s && s->state_ == client_state::playing && s->player_) {
+					int tx = s->player_->x_ - x_;
+					int ty = s->player_->y_ - y_;
+					int dir_x = (std::abs(tx) >= std::abs(ty)) ? (tx > 0 ? 1 : -1) : 0;
+					int dir_y = (std::abs(ty) > std::abs(tx))  ? (ty > 0 ? 1 : -1) : 0;
+
+					// 공격 이펙트 브로드캐스트
+					S2C_AttackEffect eff;
+					eff.size = sizeof(eff);
+					eff.type = S2C_ATTACK_EFFECT;
+					eff.object_id = id_;
+					eff.weapon_tier = 0;
+					eff.attack_type = 0; // 일반 1칸 공격
+					eff.x = x_;
+					eff.y = y_;
+					eff.dir_x = dir_x;
+					eff.dir_y = dir_y;
+					for (auto pid : old_vl) {
+						if (is_npc_id(pid)) continue;
+						auto ps = clients[pid].load();
+						if (ps && ps->state_ == client_state::playing) ps->do_send(eff.size, reinterpret_cast<char*>(&eff));
+					}
+
+					int def = s->player_->get_defense();
+					int actual_dmg = std::max(1, _attack - def);
+					s->player_->_hp -= actual_dmg;
+					
+					S2C_StatusChange stat;
+					stat.size       = sizeof(stat);
+					stat.type       = S2C_STATUS_CHANGE;
+					stat.object_id  = action.target_id;
+					stat.hp         = s->player_->_hp;
+					stat.max_hp     = s->player_->_maxHp;
+					stat.exp        = 0;
+					stat.level      = 1;
+					stat.armor_tier = s->player_->get_armor_tier();
+					stat.weapon_tier = s->player_->_weapon_tier;
+					s->do_send(stat.size, reinterpret_cast<char*>(&stat));
 				}
 			}
+			break;
 		}
-		for (auto& id : old_vl)
-		{
-			if (!new_vl.contains(id))
-			{
-				std::shared_ptr<SESSION> s = clients[id].load();
-				if (s) s->send_remove_player(id_);
+		case NpcActionType::RANGE_ATTACK: {
+			// 스켈레튼: 8방향 직선 5칸 데미지 판정
+			if (action.target_id < 0) break;
+			std::shared_ptr<SESSION> tgt = clients[action.target_id].load();
+			if (!tgt || !tgt->player_) break;
+			// 방향 뱡터 계산
+			int tx = tgt->player_->x_ - x_;
+			int ty = tgt->player_->y_ - y_;
+			int abs_tx = std::abs(tx), abs_ty = std::abs(ty);
+			int dir_x = (abs_tx >= abs_ty) ? (tx > 0 ? 1 : -1) : 0;
+			int dir_y = (abs_ty > abs_tx)  ? (ty > 0 ? 1 : -1) : 0;
+			
+			// 공격 이펙트 브로드캐스트
+			S2C_AttackEffect eff;
+			eff.size = sizeof(eff);
+			eff.type = S2C_ATTACK_EFFECT;
+			eff.object_id = id_;
+			eff.weapon_tier = 0;
+			eff.attack_type = 2; // 선형 5칸 공격
+			eff.x = x_;
+			eff.y = y_;
+			eff.dir_x = dir_x;
+			eff.dir_y = dir_y;
+			for (auto pid : old_vl) {
+				if (is_npc_id(pid)) continue;
+				auto ps = clients[pid].load();
+				if (ps && ps->state_ == client_state::playing) ps->do_send(eff.size, reinterpret_cast<char*>(&eff));
 			}
+
+			// 5칸 레이케스트: 미리 가든 플레이어를 대미지
+			for (int step = 1; step <= 5; ++step) {
+				int cx = x_ + dir_x * step;
+				int cy = y_ + dir_y * step;
+				for (auto pid : old_vl) {
+					std::shared_ptr<SESSION> s = clients[pid].load();
+					if (!s || !s->player_) continue;
+					if (s->player_->x_ == cx && s->player_->y_ == cy) {
+						int def = s->player_->get_defense();
+						int actual_dmg = std::max(1, _attack - def);
+						s->player_->_hp -= actual_dmg;
+						
+						S2C_StatusChange stat;
+						stat.size       = sizeof(stat);
+						stat.type       = S2C_STATUS_CHANGE;
+						stat.object_id  = pid;
+						stat.hp         = s->player_->_hp;
+						stat.max_hp     = s->player_->_maxHp;
+						stat.exp        = 0;
+						stat.level      = 1;
+						stat.armor_tier = s->player_->get_armor_tier();
+						stat.weapon_tier = s->player_->_weapon_tier;
+						s->do_send(stat.size, reinterpret_cast<char*>(&stat));
+					}
+				}
+			}
+			break;
+		}
+		case NpcActionType::DIE: {
+			// 크리퍼 자폭: 반경 2 내 전체 플레이어에게 AOE 데미지
+			S2C_AttackEffect eff;
+			eff.size = sizeof(eff);
+			eff.type = S2C_ATTACK_EFFECT;
+			eff.object_id = id_;
+			eff.weapon_tier = 0;
+			eff.attack_type = 3; // 5x5 광역 폭발
+			eff.x = x_;
+			eff.y = y_;
+			eff.dir_x = 0;
+			eff.dir_y = 0;
+			for (auto pid : old_vl) {
+				if (is_npc_id(pid)) continue;
+				auto ps = clients[pid].load();
+				if (ps && ps->state_ == client_state::playing) ps->do_send(eff.size, reinterpret_cast<char*>(&eff));
+			}
+
+			for (auto pid : old_vl) {
+				std::shared_ptr<SESSION> s = clients[pid].load();
+				if (!s || !s->player_) continue;
+				int d = std::abs(s->player_->x_ - x_) + std::abs(s->player_->y_ - y_);
+				if (d <= 2) {
+					int def = s->player_->get_defense();
+					int actual_dmg = std::max(1, (_attack * 2) - def);
+					s->player_->_hp -= actual_dmg; // 자폭 데미지
+					
+					S2C_StatusChange stat;
+					stat.size       = sizeof(stat);
+					stat.type       = S2C_STATUS_CHANGE;
+					stat.object_id  = pid;
+					stat.hp         = s->player_->_hp;
+					stat.max_hp     = s->player_->_maxHp;
+					stat.exp        = 0;
+					stat.level      = 1;
+					stat.armor_tier = s->player_->get_armor_tier();
+					stat.weapon_tier = s->player_->_weapon_tier;
+					s->do_send(stat.size, reinterpret_cast<char*>(&stat));
+				}
+			}
+			// 크리퍼 스스로 사망
+			_hp = 0;
+			break;
+		}
+		default:
+			break;
 		}
 
-		// 10% 확률로 주변 플레이어에게 메시지 보내기
-		if (!new_vl.empty() && (rand() % 10) == 0) {
+		// 채팅 이펀트
+		if (!action.chat_msg.empty()) {
 			S2C_ChatMessage chat_pkt;
 			chat_pkt.size = sizeof(chat_pkt);
 			chat_pkt.type = S2C_CHAT_MESSAGE;
 			chat_pkt.object_id = id_;
-			
-			const char* msgs[] = {
-				"크르르르...",
-				"누구냐!",
-				"가까이 오지마라!",
-				"침입자 발견!"
-			};
-			strcpy_s(chat_pkt.message, msgs[rand() % 4]);
-			
-			for (auto& player_id : new_vl) {
-				std::shared_ptr<SESSION> s = clients[player_id].load();
-				if (s && s->state_ == client_state::playing) {
+			strncpy_s(chat_pkt.message, action.chat_msg.c_str(), sizeof(chat_pkt.message));
+			for (auto pid : old_vl) {
+				std::shared_ptr<SESSION> s = clients[pid].load();
+				if (s && s->state_ == client_state::playing)
 					s->do_send(chat_pkt.size, reinterpret_cast<char*>(&chat_pkt));
-				}
 			}
 		}
 
-		return !new_vl.empty();
+		// 7. 섹터 갱신 + 브로드캐스트 오브젝트 패킷
+		sector.move_object(id_, old_x, old_y, x_, y_);
+
+		std::unordered_set<int> new_vl;
+		for (auto pid : sector.get_objects_nearby_sector(x_, y_)) {
+			if (is_npc_id(pid)) continue;
+			std::shared_ptr<SESSION> s = clients[pid].load();
+			if (!s || s->state_ != client_state::playing) continue;
+			new_vl.insert(pid);
+		}
+
+		for (auto& pid : new_vl) {
+			if (!old_vl.contains(pid)) {
+				std::shared_ptr<SESSION> s = clients[pid].load();
+				if (s) s->send_add_player(id_);
+			} else {
+				std::shared_ptr<SESSION> s = clients[pid].load();
+				if (s && s->state_ == client_state::playing)
+					s->send_move_packet(id_, MOVE_COOL_TIME);
+			}
+		}
+		for (auto& pid : old_vl) {
+			if (!new_vl.contains(pid)) {
+				std::shared_ptr<SESSION> s = clients[pid].load();
+				if (s) s->send_remove_player(id_);
+			}
+		}
+
+		// 7. 결과 반환: 플레이어가 주변에 있으면 action.delay_ms로 타이머 재등록, 없으면 0으로 수면
+		bool has_player_nearby = !new_vl.empty();
+		return has_player_nearby ? action.delay_ms : 0;
+	}
+
+	// ── 기존 do_random_move() 대체 (명칭은 유지하돼 do_timer_move에서 호출) ──
+	int do_ai() {
+		return run_ai_tick();
 	}
 	void wake_up()
 	{
@@ -943,7 +1206,8 @@ bool SESSION::proccess_packet(unsigned char* buff)
 			int radius = 1 + player_->_weapon_tier; // Radius grows with weapon tier
 			for (int y = player_->y_ - radius; y <= player_->y_ + radius; ++y) {
 				for (int x = player_->x_ - radius; x <= player_->x_ + radius; ++x) {
-					float dist = std::sqrt(std::pow(x - player_->x_, 2) + std::pow(y - player_->y_, 2));
+					float dist = std::sqrtf(std::powf(static_cast<float>(x - player_->x_), 2) 
+							+ std::powf(static_cast<float>(y - player_->y_), 2));
 					if (dist <= radius) {
 						// Check if within half-circle (dot product > 0)
 						int rel_x = x - player_->x_;
@@ -1027,22 +1291,61 @@ bool SESSION::proccess_packet(unsigned char* buff)
 					npc->last_hit_time_ = std::chrono::system_clock::now();
 					int actual_damage = damage * 20; // 테스트를 위해 데미지 20배 뻥튀기!
 					npc->_hp -= actual_damage;
+
+					// Send status change to update NPC HP on clients
+					S2C_StatusChange stat;
+					stat.size       = sizeof(stat);
+					stat.type       = S2C_STATUS_CHANGE;
+					stat.object_id  = oid;
+					stat.hp         = npc->_hp;
+					stat.max_hp     = npc->_maxHp;
+					stat.exp        = npc->_exp;
+					stat.level      = npc->_level;
+					stat.armor_tier = 0;
+					stat.weapon_tier = 0;
 					
-					// 데미지 입었음을 채팅(말풍선)으로 출력
-					S2C_ChatMessage chat_pkt;
-					chat_pkt.size = sizeof(chat_pkt);
-					chat_pkt.type = S2C_CHAT_MESSAGE;
-					chat_pkt.object_id = oid;
-					std::string msg = "앗! 체력: " + std::to_string(npc->_hp);
-					strncpy_s(chat_pkt.message, msg.c_str(), sizeof(chat_pkt.message));
-					
-					do_send(chat_pkt.size, reinterpret_cast<char*>(&chat_pkt));
+					do_send(stat.size, reinterpret_cast<char*>(&stat));
 					for (auto& pid : view_copy) {
 						std::shared_ptr<SESSION> s = clients[pid].load();
 						if (s && s->state_ == client_state::playing) {
-							s->do_send(chat_pkt.size, reinterpret_cast<char*>(&chat_pkt));
+							s->do_send(stat.size, reinterpret_cast<char*>(&stat));
 						}
 					}
+
+					// on_hit Lua 호출 (어그로 전환 등)
+					NpcAiContext hit_ctx;
+					hit_ctx.self_id   = oid;
+					hit_ctx.self_x    = npc->x_;
+					hit_ctx.self_y    = npc->y_;
+					hit_ctx.self_hp   = npc->_hp;
+					hit_ctx.self_max_hp = npc->_maxHp;
+					hit_ctx.current_state = static_cast<int>(npc->_aiState);
+					hit_ctx.target_id = id_;
+					NpcAction hit_action = NpcAiManager::call_on_hit(
+						static_cast<int>(npc->_npcType), hit_ctx, id_, actual_damage);
+					// 어그로 타겟 갱신
+					npc->_aggroTarget = id_;
+					npc->broadcast_state_change(static_cast<NpcState>(hit_action.new_state));
+					// 잠든 NPC 깨우기
+					npc->wake_up();
+					
+					// 데미지 입었음을 채팅(말풍선)으로 출력
+					/*{
+						S2C_ChatMessage chat_pkt;
+						chat_pkt.size = sizeof(chat_pkt);
+						chat_pkt.type = S2C_CHAT_MESSAGE;
+						chat_pkt.object_id = oid;
+						std::string msg = "앗! 체력: " + std::to_string(npc->_hp);
+						strncpy_s(chat_pkt.message, msg.c_str(), sizeof(chat_pkt.message));
+					
+						do_send(chat_pkt.size, reinterpret_cast<char*>(&chat_pkt));
+						for (auto& pid : view_copy) {
+							std::shared_ptr<SESSION> s = clients[pid].load();
+							if (s && s->state_ == client_state::playing) {
+								s->do_send(chat_pkt.size, reinterpret_cast<char*>(&chat_pkt));
+							}
+						}
+					}*/
 
 					if (npc->_hp <= 0) {
 						// Death
@@ -1121,8 +1424,8 @@ bool SESSION::proccess_packet(unsigned char* buff)
 		stat.size = sizeof(stat);
 		stat.type = S2C_STATUS_CHANGE;
 		stat.object_id = id_;
-		stat.hp = 100;
-		stat.max_hp = 100;
+		stat.hp = player_->_hp;
+		stat.max_hp = player_->_maxHp;
 		stat.exp = 0;
 		stat.level = 1;
 		stat.armor_tier = player_->get_armor_tier();
@@ -1330,6 +1633,15 @@ void npc_initialize()
 	g_armor_config    = load_armor_config_lua(lua_path.c_str());
 	g_player_config   = load_player_config_lua(player_lua.c_str());
 
+	// ── Step 1.5. AI 스크립트 경로 등록 (worker_thread에서 lazy-init) ─────
+	const std::string ai_dir = "ai/";
+	NpcAiManager::register_script(1, ai_dir + "zombie_ai.lua");
+	NpcAiManager::register_script(2, ai_dir + "skeleton_ai.lua");
+	NpcAiManager::register_script(3, ai_dir + "creeper_ai.lua");
+	NpcAiManager::register_script(4, ai_dir + "enderman_ai.lua");
+	NpcAiManager::register_script(5, ai_dir + "iron_golem_ai.lua");
+	std::cout << "[Server] NPC AI scripts registered." << std::endl;
+
 	// ── Step 1.5. 충돌 맵 로드 ─────────────────────────────
 	std::cout << "[Server] Loading map_collision.bin..." << std::endl;
 	std::ifstream coll_file(collision_path, std::ios::binary);
@@ -1444,6 +1756,9 @@ void timer_thread()
 
 void worker_thread()
 {
+	// 이 스레드의 thread_local Lua AI 상태 초기화
+	NpcAiManager::init_thread_states();
+
 	while (true)
 	{
 		DWORD bytes_transferred;
@@ -1487,7 +1802,8 @@ void worker_thread()
 				new_session->player_->id_ = current_id;
 				new_session->player_->x_ = 1000 + 100;
 				new_session->player_->y_ = 1000;
-				new_session->player_->_armor = g_armor_config.copper;
+				new_session->player_->_armor = g_armor_config.netherite;
+				new_session->player_->update_max_hp(); // 체력 최대치 업데이트
 
 				sector.add_object(current_id, new_session->player_->x_, new_session->player_->y_);
 			}
@@ -1559,17 +1875,42 @@ void worker_thread()
 		{
 			delete o;
 			auto npc = npcs[id].load();
-			bool has_nearby_player = false;
 			if (!npc)
 				break;
 
-			has_nearby_player = npc->do_timer_move();
+			int delay_ms = npc->do_timer_move();
 
-			if (has_nearby_player)
+			// AI DIE 액션(크리퍼 자폭 등) 처리
+			if (npc->_hp <= 0) {
+				npc->is_active = false;
+				// 주변 플레이어에게 제거 패킷 브로드캐스트
+				auto nearby = sector.get_objects_nearby_sector(npc->x_, npc->y_);
+				S2C_RemoveObject rm_pkt;
+				rm_pkt.size = sizeof(rm_pkt);
+				rm_pkt.type = S2C_REMOVE_OBJECT;
+				rm_pkt.object_id = id;
+				for (auto pid : nearby) {
+					if (is_npc_id(pid)) continue;
+					std::shared_ptr<SESSION> s = clients[pid].load();
+					if (s && s->state_ == client_state::playing)
+						s->do_send(rm_pkt.size, reinterpret_cast<char*>(&rm_pkt));
+				}
+				sector.remove_object(npc->id_, npc->x_, npc->y_);
+				// 5초 뒤 리스폰
+				event_type ev;
+				ev.obj_id = id;
+				ev.wakeup_time = std::chrono::system_clock::now() + std::chrono::seconds(5);
+				ev.event_id = EVENT_RESPAWN;
+				ev.target_id = -1;
+				timer_queue.push(ev);
+				break;
+			}
+
+			if (delay_ms > 0)
 			{
 				event_type ev;
 				ev.obj_id = id;
-				ev.wakeup_time = std::chrono::system_clock::now() + std::chrono::milliseconds(MOVE_COOL_TIME + rand() % MOVE_COOL_TIME_VARIATION);
+				ev.wakeup_time = std::chrono::system_clock::now() + std::chrono::milliseconds(delay_ms);
 				ev.event_id = EVENT_MOVE;
 				ev.target_id = -1;
 				timer_queue.push(ev);
@@ -1597,8 +1938,37 @@ void worker_thread()
 					sector.add_object(npc->id_, npc->x_, npc->y_);
 					npc->wake_up(); // 주변 플레이어 감지 및 이동 타이머 시작
 					
-					// 리스폰 확인용 로그 및 채팅 브로드캐스트
-					//std::cout << "[Respawn] NPC ID: " << npc->id_ << " respawned at (" << npc->x_ << ", " << npc->y_ << ")\n";
+					// 주변 플레이어에게 NPC 등장(리스폰) 패킷 전송
+					S2C_AddObject add_pkt;
+					add_pkt.size = sizeof(add_pkt);
+					add_pkt.type = PACKET_TYPE::S2C_ADD_OBJECT;
+					add_pkt.object_id = npc->id_;
+					add_pkt.x = npc->x_;
+					add_pkt.y = npc->y_;
+					strcpy_s(add_pkt.obj_name, npc->userName_);
+					add_pkt.visual_id = npc->_visualId;
+					add_pkt.hp        = npc->_hp;
+					add_pkt.max_hp    = npc->_maxHp;
+					add_pkt.exp       = npc->_exp;
+					add_pkt.level     = npc->_level;
+					add_pkt.armor_tier = 0;
+					add_pkt.weapon_tier = 0;
+					add_pkt.dir_x = 0;
+					add_pkt.dir_y = -1;
+					
+					for (auto pid : sector.get_objects_nearby_sector(npc->x_, npc->y_)) {
+						if (!is_npc_id(pid)) {
+							std::shared_ptr<SESSION> s = clients[pid].load();
+							if (s && s->state_ == client_state::playing) {
+								if (s->is_visible(npc->x_, npc->y_)) {
+									s->visible_players_mutex.lock();
+									s->visible_players.insert(npc->id_);
+									s->visible_players_mutex.unlock();
+									s->do_send(add_pkt.size, reinterpret_cast<char*>(&add_pkt));
+								}
+							}
+						}
+					}
 
 					/*S2C_ChatMessage chat_pkt;
 					chat_pkt.size = sizeof(chat_pkt);
@@ -1646,9 +2016,9 @@ int main()
 	h_iocp = CreateIoCompletionPort(INVALID_HANDLE_VALUE, NULL, 0, 0);
 	CreateIoCompletionPort((HANDLE)server_socket, h_iocp, 0, 0);
 
-	std::cout << "npc initializing..." << std::endl;
+	std::cout << "NPC 초기화 중..." << std::endl;
 	npc_initialize();
-	std::cout << "npc initialization complete. NPC Count: " << npcs.size() << std::endl;
+	std::cout << "NPC 초기화 완료. NPC Count: " << npcs.size() << std::endl;
 
 	EXP_OVER accept_over(io_type::accept);
 	accept_over.accept_socket = WSASocket(AF_INET, SOCK_STREAM, 0, NULL, 0, WSA_FLAG_OVERLAPPED);

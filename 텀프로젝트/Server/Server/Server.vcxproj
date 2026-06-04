@@ -137,6 +137,7 @@
     <ClInclude Include="lua-5.5.0\include\lua.hpp" />
     <ClInclude Include="lua-5.5.0\include\luaconf.h" />
     <ClInclude Include="lua-5.5.0\include\lualib.h" />
+    <ClInclude Include="npc_ai_manager.h" />
     <ClInclude Include="npc_loader.h" />
     <ClInclude Include="Protocol.h" />
   </ItemGroup>
@@ -145,6 +146,11 @@
     <None Include="..\..\Data\map_spawn.bin" />
     <None Include="..\..\Data\npc_config.lua" />
     <None Include="..\..\Data\player_config.lua" />
+    <None Include="ai\creeper_ai.lua" />
+    <None Include="ai\enderman_ai.lua" />
+    <None Include="ai\iron_golem_ai.lua" />
+    <None Include="ai\skeleton_ai.lua" />
+    <None Include="ai\zombie_ai.lua" />
     <None Include="packages.config" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
