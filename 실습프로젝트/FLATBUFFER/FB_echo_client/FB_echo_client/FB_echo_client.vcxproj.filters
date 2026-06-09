@@ -15,19 +15,24 @@
     </Filter>
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="npc_ai_lua.cpp">
+    <ClCompile Include="client.cpp">
       <Filter>소스 파일</Filter>
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="protocol.h">
+    <CustomBuild Include="protocol.fbs">
       <Filter>헤더 파일</Filter>
-    </ClInclude>
+    </CustomBuild>
   </ItemGroup>
   <ItemGroup>
-    <None Include="npc.lua">
+    <None Include="flatc.exe">
       <Filter>리소스 파일</Filter>
     </None>
     <None Include="packages.config" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="protocol_generated.h">
+      <Filter>헤더 파일</Filter>
+    </ClInclude>
   </ItemGroup>
 </Project>

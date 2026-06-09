@@ -11,7 +11,11 @@ using namespace std;
 using namespace chrono;
 #include <WS2tcpip.h>
 #pragma comment(lib, "Ws2_32.lib")
+#ifdef _DEBUG
+#pragma comment(lib, "libprotobufd.lib")
+#else
 #pragma comment(lib, "libprotobuf.lib")
+#endif
 
 #include "common.h"
 #undef byte
@@ -68,7 +72,7 @@ void error_display(const char* msg, int err_no)
 		MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
 		(LPTSTR)&lpMsgBuf, 0, NULL);
 	cout << msg;
-	wcout << L"¿¡·¯ " << lpMsgBuf << endl;
+	wcout << L"ì—ëŸ¬ " << lpMsgBuf << endl;
 	while (true);
 	LocalFree(lpMsgBuf);
 }
@@ -92,7 +96,7 @@ void send_packet(int id, void* buff, int packet_Size, int packet_type)
 	memset(send_over, 0x00, sizeof(OVER_EX));
 	send_over->event_type = EV_SEND;
 
-	// ¾ÕÀÇ 2byte (first byte: size, second size: type)
+	// ì•žì˜ 2byte (first byte: size, second size: type)
 	int total_packet_size = packet_Size + 2;
 	send_over->net_buf[0] = total_packet_size;
 	send_over->net_buf[1] = packet_type;
@@ -336,7 +340,7 @@ void do_worker()
 		if (num_byte == 0) {
 			Disconnect(key);
 			continue;
-		}  // Å¬¶óÀÌ¾ðÆ®°¡ closesocketÀ» ÇßÀ» °æ¿ì		
+		}  // í´ë¼ì´ì–¸íŠ¸ê°€ closesocketì„ í–ˆì„ ê²½ìš°		
 
 
 		if (EV_RECV == over_ex->event_type) {

@@ -259,6 +259,7 @@ void client_main()
 	}
 	if (recv_result == sf::Socket::Disconnected) {
 		wcout << L"Disconnected\n";
+		exit(-1);
 	}
 	if (recv_result != sf::Socket::NotReady)
 		if (received > 0) process_data(net_buf, received);
