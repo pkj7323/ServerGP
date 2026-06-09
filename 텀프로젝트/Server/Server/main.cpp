@@ -59,6 +59,26 @@ std::atomic<int> npc_index = 20000;
 HANDLE h_iocp;
 SOCKET server_socket;
 
+constexpr int EVENT_MOVE = -1;
+constexpr int EVENT_RESPAWN = -2;
+constexpr int EVENT_PROJECTILE = -3;
+struct event_type {
+	int obj_id = -1;
+	std::chrono::time_point<std::chrono::system_clock> wakeup_time;
+	int event_id = 0;
+	int target_id = -1;
+	int16_t dir_x = 0;
+	int16_t dir_y = 0;
+	int16_t step = 0;
+	int attack_power = 0;
+	int16_t start_x = 0;
+	int16_t start_y = 0;
+	constexpr bool operator < (const event_type& _Left) const
+	{
+		return (wakeup_time > _Left.wakeup_time);
+	}
+};
+
 enum class io_type
 {
 	send,
@@ -66,6 +86,7 @@ enum class io_type
 	accept,
 	npc_move,
 	npc_respawn,
+	npc_projectile,
 	count,
 };
 
@@ -80,6 +101,7 @@ public:
 	// 배칭용 멤버 추가
 	std::vector<WSABUF> wsa_bufs;
 	std::vector<std::vector<char>> pending_data;
+	event_type event_data;
 
 	EXP_OVER()
 	{
@@ -140,18 +162,7 @@ static bool is_player_id(int id)
 
 
 
-constexpr int EVENT_MOVE = -1;
-constexpr int EVENT_RESPAWN = -2;
-struct event_type {
-	int obj_id;
-	std::chrono::time_point<std::chrono::system_clock> wakeup_time;
-	int event_id;
-	int target_id;
-	constexpr bool operator < (const event_type& _Left) const
-	{
-		return (wakeup_time > _Left.wakeup_time);
-	}
-};
+// event_type and EVENT constants moved to top
 concurrency::concurrent_priority_queue<event_type> timer_queue;
 struct cell {
 	std::unordered_set<int> objects;
@@ -750,60 +761,28 @@ public:
 			break;
 		}
 		case NpcActionType::RANGE_ATTACK: {
-			// 스켈레튼: 8방향 직선 5칸 데미지 판정
+			// 스켈레튼: 1칸씩 전진하는 투사체
 			if (action.target_id < 0) break;
 			std::shared_ptr<SESSION> tgt = clients[action.target_id].load();
 			if (!tgt || !tgt->player_) break;
-			// 방향 뱡터 계산
+			// 방향 벡터 계산
 			int tx = tgt->player_->x_ - x_;
 			int ty = tgt->player_->y_ - y_;
 			int abs_tx = std::abs(tx), abs_ty = std::abs(ty);
 			int dir_x = (abs_tx >= abs_ty) ? (tx > 0 ? 1 : -1) : 0;
 			int dir_y = (abs_ty > abs_tx)  ? (ty > 0 ? 1 : -1) : 0;
 			
-			// 공격 이펙트 브로드캐스트
-			S2C_AttackEffect eff;
-			eff.size = sizeof(eff);
-			eff.type = S2C_ATTACK_EFFECT;
-			eff.object_id = id_;
-			eff.weapon_tier = 0;
-			eff.attack_type = 2; // 선형 5칸 공격
-			eff.x = x_;
-			eff.y = y_;
-			eff.dir_x = dir_x;
-			eff.dir_y = dir_y;
-			for (auto pid : old_vl) {
-				if (is_npc_id(pid)) continue;
-				auto ps = clients[pid].load();
-				if (ps && ps->state_ == client_state::playing) ps->do_send(eff.size, reinterpret_cast<char*>(&eff));
-			}
-
-			// 5칸 레이케스트: 미리 가든 플레이어를 대미지
-			for (int step = 1; step <= 5; ++step) {
-				int cx = x_ + dir_x * step;
-				int cy = y_ + dir_y * step;
-				for (auto pid : old_vl) {
-					std::shared_ptr<SESSION> s = clients[pid].load();
-					if (!s || !s->player_) continue;
-					if (s->player_->x_ == cx && s->player_->y_ == cy) {
-						int def = s->player_->get_defense();
-						int actual_dmg = std::max(1, _attack - def);
-						s->player_->_hp -= actual_dmg;
-						
-						S2C_StatusChange stat;
-						stat.size       = sizeof(stat);
-						stat.type       = S2C_STATUS_CHANGE;
-						stat.object_id  = pid;
-						stat.hp         = s->player_->_hp;
-						stat.max_hp     = s->player_->_maxHp;
-						stat.exp        = 0;
-						stat.level      = 1;
-						stat.armor_tier = s->player_->get_armor_tier();
-						stat.weapon_tier = s->player_->_weapon_tier;
-						s->do_send(stat.size, reinterpret_cast<char*>(&stat));
-					}
-				}
-			}
+			event_type ev;
+			ev.obj_id = id_;
+			ev.event_id = EVENT_PROJECTILE;
+			ev.start_x = x_;
+			ev.start_y = y_;
+			ev.dir_x = dir_x;
+			ev.dir_y = dir_y;
+			ev.step = 1;
+			ev.attack_power = _attack;
+			ev.wakeup_time = std::chrono::system_clock::now() + std::chrono::milliseconds(200);
+			timer_queue.push(ev);
 			break;
 		}
 		case NpcActionType::DIE: {
@@ -1734,6 +1713,14 @@ void timer_thread()
 					PostQueuedCompletionStatus(h_iocp, -1, top_ev.obj_id, &respawn_over->over);
 				}
 				break;
+				case EVENT_PROJECTILE:
+				{
+					EXP_OVER* proj_over = new EXP_OVER;
+					proj_over->type = io_type::npc_projectile;
+					proj_over->event_data = top_ev;
+					PostQueuedCompletionStatus(h_iocp, -1, top_ev.obj_id, &proj_over->over);
+				}
+				break;
 				default:
 					std::cout << "Unknown Event Type in Timer Thread!" << std::endl;
 					break;
@@ -1985,6 +1972,61 @@ void worker_thread()
 						}
 					}*/
 				}
+			}
+			break;
+		}
+		case io_type::npc_projectile:
+		{
+			event_type ev = o->event_data;
+			delete o;
+
+			int cx = ev.start_x + ev.dir_x * ev.step;
+			int cy = ev.start_y + ev.dir_y * ev.step;
+			
+			S2C_AttackEffect eff;
+			eff.size = sizeof(eff);
+			eff.type = S2C_ATTACK_EFFECT;
+			eff.object_id = ev.obj_id;
+			eff.weapon_tier = 0;
+			eff.attack_type = 4; // 1-tile projectile effect
+			eff.x = cx;
+			eff.y = cy;
+			eff.dir_x = ev.dir_x;
+			eff.dir_y = ev.dir_y;
+			
+			bool hit_player = false;
+			auto nearby = sector.get_objects_nearby_sector(cx, cy);
+			for (auto pid : nearby) {
+				if (is_npc_id(pid)) continue;
+				auto ps = clients[pid].load();
+				if (ps && ps->state_ == client_state::playing) {
+					ps->do_send(eff.size, reinterpret_cast<char*>(&eff));
+					
+					if (ps->player_->x_ == cx && ps->player_->y_ == cy) {
+						hit_player = true;
+						int def = ps->player_->get_defense();
+						int actual_dmg = std::max(1, ev.attack_power - def);
+						ps->player_->_hp -= actual_dmg;
+						
+						S2C_StatusChange stat;
+						stat.size       = sizeof(stat);
+						stat.type       = S2C_STATUS_CHANGE;
+						stat.object_id  = pid;
+						stat.hp         = ps->player_->_hp;
+						stat.max_hp     = ps->player_->_maxHp;
+						stat.exp        = 0;
+						stat.level      = 1;
+						stat.armor_tier = ps->player_->get_armor_tier();
+						stat.weapon_tier = ps->player_->_weapon_tier;
+						ps->do_send(stat.size, reinterpret_cast<char*>(&stat));
+					}
+				}
+			}
+
+			if (!hit_player && ev.step < 5) {
+				ev.step++;
+				ev.wakeup_time = std::chrono::system_clock::now() + std::chrono::milliseconds(200);
+				timer_queue.push(ev);
 			}
 			break;
 		}

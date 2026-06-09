@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "Singleton.h"
 
@@ -47,6 +47,7 @@ public:
 		
 		_health_potion_img = new Gdiplus::Image(L"Resource/health_potion.png");
 		_blaze_powder_img = new Gdiplus::Image(L"Resource/blaze_powder.png");
+		_arrow_img = new Gdiplus::Image(L"Resource/arrow.png");
 	}
 	~RenderManager();
 	void Release() override;
@@ -72,4 +73,5 @@ private:
 
 	Gdiplus::Image* _health_potion_img;
 	Gdiplus::Image* _blaze_powder_img;
+	Gdiplus::Image* _arrow_img;
 };

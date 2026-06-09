@@ -60,6 +60,9 @@ RenderManager::~RenderManager()
 	if (_oak_sapling_img) { delete _oak_sapling_img; _oak_sapling_img = nullptr; }
 	if (_spruce_sapling_img) { delete _spruce_sapling_img; _spruce_sapling_img = nullptr; }
 	if (_cactus_img) { delete _cactus_img; _cactus_img = nullptr; }
+	if (_health_potion_img) { delete _health_potion_img; _health_potion_img = nullptr; }
+	if (_blaze_powder_img) { delete _blaze_powder_img; _blaze_powder_img = nullptr; }
+	if (_arrow_img) { delete _arrow_img; _arrow_img = nullptr; }
 }
 
 void RenderManager::Release()
@@ -92,6 +95,9 @@ void RenderManager::Release()
 	if (_oak_sapling_img) { delete _oak_sapling_img; _oak_sapling_img = nullptr; }
 	if (_spruce_sapling_img) { delete _spruce_sapling_img; _spruce_sapling_img = nullptr; }
 	if (_cactus_img) { delete _cactus_img; _cactus_img = nullptr; }
+	if (_health_potion_img) { delete _health_potion_img; _health_potion_img = nullptr; }
+	if (_blaze_powder_img) { delete _blaze_powder_img; _blaze_powder_img = nullptr; }
+	if (_arrow_img) { delete _arrow_img; _arrow_img = nullptr; }
 }
 
 void RenderManager::Render(HWND hWnd)
@@ -454,6 +460,43 @@ static auto last_time = std::chrono::steady_clock::now();
 							int px = rel_x * cellWidth;
 							int py = static_cast<int>(screen_y * cellHeight);
 							graphics.FillRectangle(&effectBrush, px, py, cellWidth, cellHeight);
+						}
+					}
+				} else if (it->attack_type == 4) { // 1-tile projectile (Arrow)
+					int rel_x = it->x - static_cast<int>(left_x);
+					int rel_y = it->y - static_cast<int>(bottom_y);
+					if (rel_x >= 0 && rel_x < VIEW_WIDTH && rel_y >= 0 && rel_y < VIEW_HEIGHT) {
+						float screen_y = (VIEW_HEIGHT - 1.0f - rel_y);
+						int px = rel_x * cellWidth;
+						int py = static_cast<int>(screen_y * cellHeight);
+						
+						// 1. Draw the damage cell (semi-transparent colored box)
+						graphics.FillRectangle(&effectBrush, px, py, cellWidth, cellHeight);
+						
+						// 2. Draw the arrow image
+						if (_arrow_img) {
+							float cx = px + cellWidth / 2.0f;
+							float cy = py + cellHeight / 2.0f;
+							float angle = 0.0f;
+							if (dx == 1) angle = 90.0f; // East
+							else if (dx == -1) angle = -90.0f; // West
+							else if (dy == 1) angle = 0.0f; // North
+							else if (dy == -1) angle = 180.0f; // South
+							
+							// Original image points Top-Right (45 degrees clockwise from North)
+							// Subtract 45 degrees to offset it so it points to the correct angle
+							angle -= 45.0f;
+							
+							graphics.TranslateTransform(cx, cy);
+							graphics.RotateTransform(angle);
+							graphics.DrawImage(_arrow_img, -cellWidth/2, -cellHeight/2, cellWidth, cellHeight);
+							graphics.ResetTransform();
+						} else {
+							int arrow_size = std::min(cellWidth, cellHeight) / 2;
+							int offset_x = (cellWidth - arrow_size) / 2;
+							int offset_y = (cellHeight - arrow_size) / 2;
+							Gdiplus::SolidBrush arrowBrush(Gdiplus::Color(255, 200, 200, 200)); 
+							graphics.FillRectangle(&arrowBrush, px + offset_x, py + offset_y, arrow_size, arrow_size);
 						}
 					}
 				} else if (it->attack_type == 3) { // 5x5 explosion AoE (Creeper)
