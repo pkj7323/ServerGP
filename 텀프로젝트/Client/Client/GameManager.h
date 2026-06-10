@@ -33,6 +33,9 @@ public:
 	void set_username(const std::string& name) { _username = name; }
 	const std::string& username() const { return _username; }
 
+	void set_user_id(const std::string& id) { _user_id = id; }
+	const std::string& user_id() const { return _user_id; }
+
 	void set_running(bool running) { _isRunning = running; }
 	bool is_running() const { return _isRunning; }
 
@@ -91,6 +94,7 @@ private:
 	std::unordered_map<int, Object> _npcs;
 	int _myId;
 	std::string _username;
+	std::string _user_id;
 	bool _isRunning;
 
 	std::chrono::time_point<std::chrono::steady_clock> _last_potion_use;

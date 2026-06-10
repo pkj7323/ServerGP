@@ -129,9 +129,11 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="DBManager.cpp" />
     <ClCompile Include="main.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="DBManager.h" />
     <ClInclude Include="lua-5.5.0\include\lauxlib.h" />
     <ClInclude Include="lua-5.5.0\include\lua.h" />
     <ClInclude Include="lua-5.5.0\include\lua.hpp" />

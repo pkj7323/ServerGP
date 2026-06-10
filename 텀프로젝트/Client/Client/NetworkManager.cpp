@@ -1,4 +1,4 @@
-﻿#include "pch.h"
+#include "pch.h"
 #include "NetworkManager.h"
 
 #include "common.h"
@@ -41,6 +41,7 @@ bool NetworkManager::Connect(const std::string& ip, int port)
 	login_pkt.size = sizeof(login_pkt);
 	login_pkt.type = C2S_LOGIN;
 	strcpy_s(login_pkt.username, GameManager::Instance()->username().c_str());
+	strcpy_s(login_pkt.user_id, GameManager::Instance()->user_id().c_str());
 	
 	send_packet(&login_pkt);
 

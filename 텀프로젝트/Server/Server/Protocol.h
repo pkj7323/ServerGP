@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 constexpr short PORT = 3500;
 constexpr int WORLD_WIDTH = 2000;
@@ -54,6 +54,7 @@ struct C2S_Login {
 	unsigned char size;
 	PACKET_TYPE   type;
 	char username[MAX_NAME_LEN];
+	char user_id[MAX_NAME_LEN];
 };
 
 struct C2S_Move {

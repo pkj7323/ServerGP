@@ -194,6 +194,12 @@ int WINAPI WinMain(HINSTANCE hI, HINSTANCE hP, LPSTR lp, int nS) {
 	std::getline(std::cin, server_ip);
 	if (server_ip.empty()) server_ip = "127.0.0.1";
 
+	std::string user_id;
+	std::cout << "Enter user id: ";
+	std::getline(std::cin, user_id);
+	if (user_id.length() >= MAX_NAME_LEN) user_id = user_id.substr(0, MAX_NAME_LEN - 1);
+	gm->set_user_id(user_id);
+
 	std::string username;
 	std::cout << "Enter username: ";
 	std::getline(std::cin, username);

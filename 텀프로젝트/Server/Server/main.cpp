@@ -16,6 +16,7 @@
 #include <queue>
 
 #include "Protocol.h"
+#include "DBManager.h"
 #include "npc_loader.h"
 #include "npc_ai_manager.h"
 #include <tbb/concurrent_unordered_map.h>
@@ -87,6 +88,8 @@ enum class io_type
 	npc_move,
 	npc_respawn,
 	npc_projectile,
+	db_player_auth,
+	db_save_position,
 	count,
 };
 
@@ -102,6 +105,7 @@ public:
 	std::vector<WSABUF> wsa_bufs;
 	std::vector<std::vector<char>> pending_data;
 	event_type event_data;
+	DBTask db_task;
 
 	EXP_OVER()
 	{
@@ -370,6 +374,7 @@ public:
 	EXP_OVER		recv_over_;
 	int				prev_recv_count_ = 0;
 	client_state	state_;
+	char			userId_[MAX_NAME_LEN] = {};
 
 	std::shared_ptr<Player> player_;
 
@@ -951,12 +956,15 @@ bool SESSION::proccess_packet(unsigned char* buff)
 	case PACKET_TYPE::C2S_LOGIN:
 	{
 		C2S_Login* p = reinterpret_cast<C2S_Login*>(buff);
-		strncpy_s(player_->userName_, p->username, MAX_NAME_LEN);
-		state_ = client_state::playing;
-		sector.add_object(id_, player_->x_, player_->y_); // 섹터에 플레이어 추가
-		send_avatar_info();
-		send_already_spawn_players();
-		broadcast_new_player(id_);
+		strncpy_s(userId_, sizeof(userId_), p->user_id, sizeof(userId_) - 1); // Store user_id from packet
+		
+		state_ = client_state::connected;
+		DBTask login_task;
+		login_task.session_id = id_;
+		login_task.type = DBTaskType::LOGIN_AUTH;
+		login_task.ioType = static_cast<int>(io_type::db_player_auth);
+		login_task.data = std::string(p->user_id);
+		DBManager::Instance().PushTask(login_task);
 		break;
 	}
 	case PACKET_TYPE::C2S_MOVE:
@@ -1589,6 +1597,22 @@ void client_disconnect(int client_id)
 	std::shared_ptr<SESSION> cl = clients[client_id].load();
 	if (nullptr != cl && cl->player_) {
 		cl->state_ = client_state::logout;
+		
+		// DB 저장 태스크 큐에 푸시
+		DBTask task;
+		task.type = DBTaskType::SAVE_USER_DATA;
+		task.ioType = static_cast<int>(io_type::db_save_position);
+		task.session_id = client_id;
+		
+		player_data pd = {};
+		pd.x = cl->player_->x_;
+		pd.y = cl->player_->y_;
+		pd.armor_tier = cl->player_->get_armor_tier();
+		pd.weapon_tier = cl->player_->_weapon_tier;
+		strncpy_s(pd.user_id, sizeof(pd.user_id), cl->userId_, sizeof(pd.user_id) - 1);
+		task.data = pd;
+		DBManager::Instance().PushTask(task);
+
 		broadcast_player_remove_packet(cl->id_);
 		sector.remove_object(cl->id_, cl->player_->x_, cl->player_->y_);
 		closesocket(cl->client_);
@@ -2030,6 +2054,51 @@ void worker_thread()
 			}
 			break;
 		}
+		case io_type::db_save_position:
+		{
+			delete o;
+			break;
+		}
+		case io_type::db_player_auth:
+		{
+			auto new_session = clients[id].load();
+			if (new_session)
+			{
+				DBTask task = o->db_task;
+				if (std::holds_alternative<player_data>(task.data))
+				{
+					player_data result = std::get<player_data>(task.data);
+					if (result.success)
+					{
+						new_session->player_->x_ = result.x;
+						new_session->player_->y_ = result.y;
+						new_session->player_->_armor = result.armor_tier;
+						new_session->player_->_weapon_tier = result.weapon_tier;
+						new_session->player_->update_max_hp();
+						
+						strncpy_s(new_session->userId_, sizeof(new_session->userId_), result.user_id, sizeof(new_session->userId_) - 1);
+						strncpy_s(new_session->player_->userName_, sizeof(new_session->player_->userName_), result.user_name, MAX_NAME_LEN);
+						
+						sector.add_object(id, new_session->player_->x_, new_session->player_->y_);
+						new_session->send_avatar_info();
+						new_session->send_already_spawn_players();
+						broadcast_new_player(id);
+						new_session->state_ = client_state::playing;
+						std::cout << "Player[" << id << "] authenticated successfully. Position: (" << result.x << ", " << result.y << ")\n";
+					}
+					else
+					{
+						new_session->send_login_failure();
+					}
+				}
+				else
+				{
+					new_session->send_login_failure();
+				}
+			}
+			delete o;
+			break;
+		}
 		default:
 			std::cout << "Unknown IO Type!" << std::endl;
 			exit(-1);
@@ -2041,6 +2110,7 @@ void worker_thread()
 int main()
 {
 	std::wcout.imbue(std::locale("korean"));
+	setlocale(LC_ALL, "korean");
 	srand(static_cast<unsigned int>(time(NULL)));
 	WSADATA WSAData;
 	WSAStartup(MAKEWORD(2, 2), &WSAData);
@@ -2057,6 +2127,14 @@ int main()
 
 	h_iocp = CreateIoCompletionPort(INVALID_HANDLE_VALUE, NULL, 0, 0);
 	CreateIoCompletionPort((HANDLE)server_socket, h_iocp, 0, 0);
+
+	DBManager::Instance().Init([](int session_id, int io_type_val, const DBTask& task) {
+		EXP_OVER* over = new EXP_OVER;
+		over->type = static_cast<io_type>(io_type_val);
+		over->db_task = task;
+		PostQueuedCompletionStatus(h_iocp, 0, session_id, &over->over);
+	});
+	DBManager::Instance().StartDBThread();
 
 	std::cout << "NPC 초기화 중..." << std::endl;
 	npc_initialize();
