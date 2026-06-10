@@ -1,4 +1,4 @@
-#include <iostream>
+ï»¿#include <iostream>
 #include <sdkddkver.h>
 #include <asio.hpp>
 #include <flatbuffers/flatbuffers.h>
@@ -9,73 +9,73 @@ constexpr   int BUFSIZE = 1024;
 
 std::string read_message(asio::ip::tcp::socket& s)
 {
-    char buf[BUFSIZE];
-    // 1. ¸Ş¸ğ¸®¿¡ Flatbuffers·Î »ı¼ºµÈ µ¥ÀÌÅÍ¸¦ ³Ö´Â´Ù.
-    size_t len = s.read_some(asio::buffer(buf, BUFSIZE));
+	char buf[BUFSIZE];
+	// 1. ë©”ëª¨ë¦¬ì— Flatbuffersë¡œ ìƒì„±ëœ ë°ì´í„°ë¥¼ ë„£ëŠ”ë‹¤.
+	size_t len = s.read_some(asio::buffer(buf, BUFSIZE));
 
-    // 2. ÆĞÅ¶ Å¸ÀÔ¿¡ ¸Â´Â flatbuffer °´Ã¼¸¦ »ı¼ºÇÑ´Ù.
-    //        GetRoot ÅÛÇÃ¸´À» »ç¿ëÇÑ´Ù.
-    //        flatc°¡ »ı¼ºÇÑ table¿¡ ÇØ´çÇÏ´Â °´Ã¼ÀÇ Æ÷ÀÎÅÍ°¡ ³ª¿Â´Ù.
-    auto packet = flatbuffers::GetRoot<Message_S2C>(buf);
+	// 2. íŒ¨í‚· íƒ€ì…ì— ë§ëŠ” flatbuffer ê°ì²´ë¥¼ ìƒì„±í•œë‹¤.
+	//        GetRoot í…œí”Œë¦¿ì„ ì‚¬ìš©í•œë‹¤.
+	//        flatcê°€ ìƒì„±í•œ tableì— í•´ë‹¹í•˜ëŠ” ê°ì²´ì˜ í¬ì¸í„°ê°€ ë‚˜ì˜¨ë‹¤.
+	auto packet = flatbuffers::GetRoot<Message_S2C>(buf);
 
-    // 3. °´Ã¼¿¡¼­ ¿øÇÏ´Â °ªÀ» ²¨³½´Ù.
-    //     °ªÀ» Á÷Á¢ access´Â ÇÒ ¼ö ¾ø°í, ÇÔ¼ö ÇüÅÂ·Î read¸¸ °¡´ÉÇÏ´Ù.
-    auto mess = packet->msg();
+	// 3. ê°ì²´ì—ì„œ ì›í•˜ëŠ” ê°’ì„ êº¼ë‚¸ë‹¤.
+	//     ê°’ì„ ì§ì ‘ accessëŠ” í•  ìˆ˜ ì—†ê³ , í•¨ìˆ˜ í˜•íƒœë¡œ readë§Œ ê°€ëŠ¥í•˜ë‹¤.
+	auto mess = packet->msg();
 
-    // 4. ÀĞÀº °ªÀ» ¿øÇÏ´Â ´ë·Î »ç¿ë
-    //     std::stringÀ¸·Î »ç¿ëÇÏ°í ½ÍÀ¸¸é GetStringÀÌ¶ó´Â ÇÔ¼ö¸¦ »ç¿ëÇÑ´Ù.
-    return flatbuffers::GetString(mess);
+	// 4. ì½ì€ ê°’ì„ ì›í•˜ëŠ” ëŒ€ë¡œ ì‚¬ìš©
+	//     std::stringìœ¼ë¡œ ì‚¬ìš©í•˜ê³  ì‹¶ìœ¼ë©´ GetStringì´ë¼ëŠ” í•¨ìˆ˜ë¥¼ ì‚¬ìš©í•œë‹¤.
+	return flatbuffers::GetString(mess);
 }
 
 void send_message(asio::ip::tcp::socket& s, char *buf)
 {
-    std::string mess(buf);
+	std::string mess(buf);
 
-    // 1. ¹«Á¶°Ç Ã³À½¿¡ ÀÛ¼ºÇÏ´Â ºô´õ °´Ã¼  fbb
-    flatbuffers::FlatBufferBuilder fbb;
+	// 1. ë¬´ì¡°ê±´ ì²˜ìŒì— ì‘ì„±í•˜ëŠ” ë¹Œë” ê°ì²´  fbb
+	flatbuffers::FlatBufferBuilder fbb;
 
-    // 2. ÆĞÅ¶¿¡ µé¾î°¥ µ¥ÀÌÅÍ fbb ÀÛ¼º
-    //   ´Ü, ±âº» ÀÚ·á ±¸Á¶´Â ¿¹¿Ü (int, char, bool)
-    //   string, struct ´Â ¹İµå½Ã ¸ÕÀú ÀÛ¼ºÇØ¾ß ÇÑ´Ù.
-    auto fb_mess = fbb.CreateString(mess);
+	// 2. íŒ¨í‚·ì— ë“¤ì–´ê°ˆ ë°ì´í„° fbb ì‘ì„±
+	//   ë‹¨, ê¸°ë³¸ ìë£Œ êµ¬ì¡°ëŠ” ì˜ˆì™¸ (int, char, bool)
+	//   string, struct ëŠ” ë°˜ë“œì‹œ ë¨¼ì € ì‘ì„±í•´ì•¼ í•œë‹¤.
+	auto fb_mess = fbb.CreateString(mess);
 
-    // 3. ÆĞÅ¶ »ı¼º °´Ã¼¸¦ ¸¸µç´Ù.  "ÆĞÅ¶"Builder °´Ã¼
-    Message_C2SBuilder packet(fbb);
+	// 3. íŒ¨í‚· ìƒì„± ê°ì²´ë¥¼ ë§Œë“ ë‹¤.  "íŒ¨í‚·"Builder ê°ì²´
+	Message_C2SBuilder packet(fbb);
 
-    // 4. ÆĞÅ¶¿¡ °ªµéÀ» ÀúÀå
-    //    add_"ÇÊµåÀÌ¸§" ¸Ş¼Òµå¸¦ »ç¿ëÇÑ´Ù.
-    packet.add_msg(fb_mess);
+	// 4. íŒ¨í‚·ì— ê°’ë“¤ì„ ì €ì¥
+	//    add_"í•„ë“œì´ë¦„" ë©”ì†Œë“œë¥¼ ì‚¬ìš©í•œë‹¤.
+	packet.add_msg(fb_mess);
 
 
-    // 5. Finish() È£ÃâÇØ ÁØ´Ù.
-    auto message = packet.Finish();
+	// 5. Finish() í˜¸ì¶œí•´ ì¤€ë‹¤.
+	auto message = packet.Finish();
 
-    // 6. fbbµµ Finish()¸¦ È£ÃâÇØ ÁØ´Ù.
-    //    Finish¸¦ È£ÃâÇÏ±â Àü¿¡´Â µ¥ÀÌÅÍ°¡ ÇÏ³ªµµ µé¾î°¡ ÀÖÁö ¾Ê°í, Finish¸¦ È£ÃâÇØ¾ß add_"ÇÊµåÀÌ¸§"À¸·Î Ãß°¡ÇÑ data°¡ ÀúÀåµÈ´Ù.
-    //    Finish¸¦ È£ÃâÇßÀ¸¸é ÀÌÈÄ ´õ Ãß°¡ÇÒ ¼ö ¾ø´Ù. ³¡ÀÌ´Ù.
-    fbb.Finish(message);
+	// 6. fbbë„ Finish()ë¥¼ í˜¸ì¶œí•´ ì¤€ë‹¤.
+	//    Finishë¥¼ í˜¸ì¶œí•˜ê¸° ì „ì—ëŠ” ë°ì´í„°ê°€ í•˜ë‚˜ë„ ë“¤ì–´ê°€ ìˆì§€ ì•Šê³ , Finishë¥¼ í˜¸ì¶œí•´ì•¼ add_"í•„ë“œì´ë¦„"ìœ¼ë¡œ ì¶”ê°€í•œ dataê°€ ì €ì¥ëœë‹¤.
+	//    Finishë¥¼ í˜¸ì¶œí–ˆìœ¼ë©´ ì´í›„ ë” ì¶”ê°€í•  ìˆ˜ ì—†ë‹¤. ëì´ë‹¤.
+	fbb.Finish(message);
 
-    // 7. Binary Data°¡ ¸¸µé¾î Á³À¸´Ï »ç¿ëÇÏ¸é µÈ´Ù.
-    //       GetBUfferPointer()·Î ÁÖ¼Ò¸¦ ¾Ë ¼ö ÀÖ°í, GetSize()·Î Å©±â¸¦ ¾Ë ¼ö ÀÖ´Ù.
-    asio::write(s, asio::buffer(fbb.GetBufferPointer(), fbb.GetSize()));
+	// 7. Binary Dataê°€ ë§Œë“¤ì–´ ì¡Œìœ¼ë‹ˆ ì‚¬ìš©í•˜ë©´ ëœë‹¤.
+	//       GetBUfferPointer()ë¡œ ì£¼ì†Œë¥¼ ì•Œ ìˆ˜ ìˆê³ , GetSize()ë¡œ í¬ê¸°ë¥¼ ì•Œ ìˆ˜ ìˆë‹¤.
+	asio::write(s, asio::buffer(fbb.GetBufferPointer(), fbb.GetSize()));
 }
 
 int main(int argc, char* argv[])
 {
-    try {
-        asio::io_context io_context;
-        asio::ip::tcp::socket c_socket(io_context);
-        c_socket.connect(asio::ip::tcp::endpoint(asio::ip::address::from_string("127.0.0.1"), PORT));
-        for (;;) {
-            char buf[1024 + 1];
-            std::cout << "Enter Message : ";
-            std::cin.getline(buf, BUFSIZE);
-            send_message(c_socket, buf);
-            std::string message = read_message(c_socket);
-            std::cout << message.size() << " bytes received: " << message << std::endl;
-        }
-    }
-    catch (std::exception& e) {
-        std::cerr << "Exception: " << e.what() << "\n";
-    }
+	try {
+		asio::io_context io_context;
+		asio::ip::tcp::socket c_socket(io_context);
+		c_socket.connect(asio::ip::tcp::endpoint(asio::ip::address::from_string("127.0.0.1"), PORT));
+		for (;;) {
+			char buf[1024 + 1];
+			std::cout << "Enter Message : ";
+			std::cin.getline(buf, BUFSIZE);
+			send_message(c_socket, buf);
+			std::string message = read_message(c_socket);
+			std::cout << message.size() << " bytes received: " << message << std::endl;
+		}
+	}
+	catch (std::exception& e) {
+		std::cerr << "Exception: " << e.what() << "\n";
+	}
 }
