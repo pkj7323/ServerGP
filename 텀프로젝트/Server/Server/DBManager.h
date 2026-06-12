@@ -20,6 +20,12 @@ struct player_data {
 	char user_name[MAX_NAME_LEN];
 	int armor_tier;
 	int weapon_tier;
+	int hp;
+	int max_hp;
+	int level;
+	int exp;
+	int gold;
+	std::unordered_map<int, int> inventory;
 };
 
 // Define DB Task Types

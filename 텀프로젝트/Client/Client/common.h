@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 // ID Type Flags
 constexpr int ID_TYPE_PLAYER = 0x00000000;
 constexpr int ID_TYPE_NPC = 0x40000000;
@@ -16,7 +16,7 @@ static bool is_player_id(int id)
 
 // Constants for rendering
 constexpr int CELL_SIZE = 65;
-constexpr int VIEW_WIDTH = 16;
-constexpr int VIEW_HEIGHT = 16;
+constexpr int VIEW_WIDTH = 40;
+constexpr int VIEW_HEIGHT = 22;
 constexpr int WINDOW_WIDTH = VIEW_WIDTH * CELL_SIZE;
 constexpr int WINDOW_HEIGHT = VIEW_HEIGHT * CELL_SIZE;

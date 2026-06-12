@@ -1,4 +1,4 @@
-﻿#include "pch.h"
+#include "pch.h"
 #include "RenderManager.h"
 #include "GameManager.h"
 
@@ -581,18 +581,60 @@ static auto last_time = std::chrono::steady_clock::now();
 			graphics.DrawString(wPrompt.c_str(), -1, &font, Gdiplus::PointF(static_cast<float>(chatStartX + 5.f), static_cast<float>(chatStartY + 14.f)), &yellowBrush);
 		}
 
-		// 7. Draw HUD (Hotbar Placeholder)
+		// 7. Draw HUD (Hotbar)
 		int hotbarWidth = 300;
 		int hotbarHeight = 40;
 		int hotbarX = (width - hotbarWidth) / 2;
 		int hotbarY = height - hotbarHeight - 10;
 		graphics.FillRectangle(&blackTransBrush, hotbarX, hotbarY, hotbarWidth, hotbarHeight);
 		Gdiplus::Pen whitePen(Gdiplus::Color(255, 255, 255, 255), 2.0f);
+		Gdiplus::StringFormat formatCenter;
+		formatCenter.SetAlignment(Gdiplus::StringAlignmentCenter);
+		formatCenter.SetLineAlignment(Gdiplus::StringAlignmentCenter);
+
 		for (int i = 0; i < 5; ++i) {
-			graphics.DrawRectangle(&whitePen, hotbarX + i * 40 + 55, hotbarY + 5, 30, 30);
+			int slotX = hotbarX + i * 40 + 55;
+			int slotY = hotbarY + 5;
+			graphics.DrawRectangle(&whitePen, slotX, slotY, 30, 30);
+			
+			// Draw slot numbers
+			std::wstring slotNum = std::to_wstring(i + 1);
+			graphics.DrawString(slotNum.c_str(), -1, &font, Gdiplus::PointF(static_cast<float>(slotX + 10), static_cast<float>(hotbarY - 15)), &whiteBrush);
+
+			// Slot 1: Health Potion (mapped to ItemType::HEALTH_POTION)
+			if (i == 0) {
+				int potion_count = gm->my_inventory()[static_cast<int>(ItemType::HEALTH_POTION)];
+				if (_health_potion_img) {
+					graphics.DrawImage(_health_potion_img, slotX + 3, slotY + 3, 24, 24);
+					Gdiplus::Font smallFont(&fontFamily, 10, Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
+					graphics.DrawString(std::to_wstring(potion_count).c_str(), -1, &smallFont, Gdiplus::PointF(static_cast<float>(slotX + 16), static_cast<float>(slotY + 16)), &whiteBrush);
+				}
+
+				int potionElapsed = (int)std::chrono::duration_cast<std::chrono::milliseconds>(now - gm->last_potion_use()).count();
+				if (potionElapsed < 5000) {
+					graphics.FillRectangle(&blackTransBrush, slotX, slotY, 30, 30);
+					float remain = (5000 - potionElapsed) / 1000.0f;
+					wchar_t buf[16];
+					swprintf(buf, 16, L"%.1f", remain);
+					graphics.DrawString(buf, -1, &font, Gdiplus::RectF((float)slotX, (float)slotY, 30.0f, 30.0f), &formatCenter, &whiteBrush);
+				}
+			}
+			// Slot 2: Buff Skill (mapped to Blaze Powder Image)
+			else if (i == 1) {
+				if (_blaze_powder_img) {
+					graphics.DrawImage(_blaze_powder_img, slotX + 3, slotY + 3, 24, 24);
+				}
+
+				int skillElapsed = (int)std::chrono::duration_cast<std::chrono::milliseconds>(now - gm->last_skill_use()).count();
+				if (skillElapsed < 15000) {
+					graphics.FillRectangle(&blackTransBrush, slotX, slotY, 30, 30);
+					float remain = (15000 - skillElapsed) / 1000.0f;
+					wchar_t buf[16];
+					swprintf(buf, 16, L"%.1f", remain);
+					graphics.DrawString(buf, -1, &font, Gdiplus::RectF((float)slotX, (float)slotY, 30.0f, 30.0f), &formatCenter, &whiteBrush);
+				}
+			}
 		}
-		graphics.DrawString(L"1", -1, &font, Gdiplus::PointF(static_cast<float>(hotbarX + 55 + 10), static_cast<float>(hotbarY - 15)), &whiteBrush);
-		graphics.DrawString(L"2", -1, &font, Gdiplus::PointF(static_cast<float>(hotbarX + 95 + 10), static_cast<float>(hotbarY - 15)), &whiteBrush);
 
 		// 8. Draw Inventory (if toggled)
 		if (gm->show_inventory()) {
@@ -632,6 +674,17 @@ static auto last_time = std::chrono::steady_clock::now();
 					Gdiplus::Image* sword_img = _swords[my_player.weapon_tier];
 					if (sword_img) graphics.DrawImage(sword_img, eqSlotX_sword + 3, eqSlotY + 3, 24, 24);
 				}
+
+				// Draw Level and EXP
+				Gdiplus::Font boldFont(&fontFamily, 14, Gdiplus::FontStyleBold, Gdiplus::UnitPixel);
+				Gdiplus::SolidBrush cyanBrush(Gdiplus::Color(255, 0, 255, 255)); // Cyan for level
+				Gdiplus::SolidBrush yellowBrush(Gdiplus::Color(255, 255, 255, 0)); // Yellow for exp
+				
+				std::wstring lvStr = L"Lv." + std::to_wstring(my_player.level);
+				std::wstring expStr = L"Exp: " + std::to_wstring(my_player.exp);
+				
+				graphics.DrawString(lvStr.c_str(), -1, &boldFont, Gdiplus::PointF(static_cast<float>(invX + 150), static_cast<float>(invY + 45)), &cyanBrush);
+				graphics.DrawString(expStr.c_str(), -1, &boldFont, Gdiplus::PointF(static_cast<float>(invX + 210), static_cast<float>(invY + 45)), &yellowBrush);
 			}
 
 			// --- Draw List-Based Inventory Items ---
@@ -669,57 +722,14 @@ static auto last_time = std::chrono::steady_clock::now();
 			}
 		}
 
-		// 7. Quick Slot & Buff UI
-		{
-			int qsWidth = 40;
-			int qsHeight = 40;
-			int spacing = 10;
-			int startX = width - (qsWidth * 2 + spacing) - 20; // Bottom right
-			int startY = height - qsHeight - 20;
-
-			Gdiplus::SolidBrush darkTransBrush(Gdiplus::Color(150, 0, 0, 0));
-			Gdiplus::StringFormat formatCenter;
-			formatCenter.SetAlignment(Gdiplus::StringAlignmentCenter);
-			formatCenter.SetLineAlignment(Gdiplus::StringAlignmentCenter);
-			
-			// Slot 1: Potion
-			graphics.DrawRectangle(&whitePen, startX, startY, qsWidth, qsHeight);
-			if (_health_potion_img) graphics.DrawImage(_health_potion_img, startX + 4, startY + 4, 32, 32);
-			graphics.DrawString(L"1", -1, &font, Gdiplus::PointF(static_cast<float>(startX), static_cast<float>(startY - 15)), &whiteBrush);
-
-			int potionElapsed = (int)std::chrono::duration_cast<std::chrono::milliseconds>(now - gm->last_potion_use()).count();
-			if (potionElapsed < 5000) {
-				graphics.FillRectangle(&darkTransBrush, startX, startY, qsWidth, qsHeight);
-				float remain = (5000 - potionElapsed) / 1000.0f;
-				wchar_t buf[16];
-				swprintf(buf, 16, L"%.1f", remain);
-				graphics.DrawString(buf, -1, &font, Gdiplus::RectF((float)startX, (float)startY, (float)qsWidth, (float)qsHeight), &formatCenter, &whiteBrush);
-			}
-
-			// Slot 2: Skill
-			int slot2X = startX + qsWidth + spacing;
-			graphics.DrawRectangle(&whitePen, slot2X, startY, qsWidth, qsHeight);
-			if (_blaze_powder_img) graphics.DrawImage(_blaze_powder_img, slot2X + 4, startY + 4, 32, 32);
-			graphics.DrawString(L"2", -1, &font, Gdiplus::PointF(static_cast<float>(slot2X), static_cast<float>(startY - 15)), &whiteBrush);
-
-			int skillElapsed = (int)std::chrono::duration_cast<std::chrono::milliseconds>(now - gm->last_skill_use()).count();
-			if (skillElapsed < 15000) {
-				graphics.FillRectangle(&darkTransBrush, slot2X, startY, qsWidth, qsHeight);
-				float remain = (15000 - skillElapsed) / 1000.0f;
-				wchar_t buf[16];
-				swprintf(buf, 16, L"%.1f", remain);
-				graphics.DrawString(buf, -1, &font, Gdiplus::RectF((float)slot2X, (float)startY, (float)qsWidth, (float)qsHeight), &formatCenter, &whiteBrush);
-			}
-
-			// Buff Gauge
-			if (now < gm->buff_end_time()) {
-				int buffRemain = static_cast<int>(std::chrono::duration_cast<std::chrono::milliseconds>(gm->buff_end_time() - now).count());
-				float buffSec = buffRemain / 1000.0f;
-				wchar_t buffText[64];
-				swprintf(buffText, 64, L"스킬 유지: %.1f초", buffSec);
-				Gdiplus::SolidBrush orangeBrush(Gdiplus::Color(255, 200, 100, 0));
-				graphics.DrawString(buffText, -1, &font, Gdiplus::PointF(static_cast<float>(width / 2 - 50), 50.0f), &orangeBrush);
-			}
+		// Buff Gauge
+		if (now < gm->buff_end_time()) {
+			int buffRemain = static_cast<int>(std::chrono::duration_cast<std::chrono::milliseconds>(gm->buff_end_time() - now).count());
+			float buffSec = buffRemain / 1000.0f;
+			wchar_t buffText[64];
+			swprintf(buffText, 64, L"스킬 유지: %.1f초", buffSec);
+			Gdiplus::SolidBrush orangeBrush(Gdiplus::Color(255, 200, 100, 0));
+			graphics.DrawString(buffText, -1, &font, Gdiplus::PointF(static_cast<float>(width / 2 - 50), 50.0f), &orangeBrush);
 		}
 	}
 

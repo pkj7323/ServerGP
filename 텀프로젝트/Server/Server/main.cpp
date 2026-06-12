@@ -1,4 +1,4 @@
-﻿#define NOMINMAX
+#define NOMINMAX
 #include <algorithm>
 #include <iostream>
 #include <WS2tcpip.h>
@@ -295,6 +295,8 @@ public:
 	short _dir_y = -1;
 	int _hp = 100;
 	int _maxHp = 100;
+	int _level = 1;
+	int _exp = 0;
 
 	// Inventory
 	int _gold = 0;
@@ -335,14 +337,33 @@ public:
 		}
 	}
 
+	int get_required_exp() const {
+		return _level * _level * 100;
+	}
+
+	bool gain_exp(int amount) {
+		bool leveled_up = false;
+		_exp += amount;
+		while (_exp >= get_required_exp()) {
+			_exp -= get_required_exp();
+			_level++;
+			leveled_up = true;
+		}
+		if (leveled_up) {
+			update_max_hp();
+			_hp = _maxHp; // 레벨업 시 체력 비율 상관없이 100% 회복
+		}
+		return leveled_up;
+	}
+
 	void update_max_hp() {
 		char tier = get_armor_tier();
-		int new_max = 100;
+		int new_max = 100 + (_level - 1) * 20; // 레벨당 20 증가
 		switch (tier) {
-			case 1: new_max = 150; break;
-			case 2: new_max = 200; break;
-			case 3: new_max = 300; break;
-			case 4: new_max = 500; break;
+			case 1: new_max += 50; break;
+			case 2: new_max += 100; break;
+			case 3: new_max += 200; break;
+			case 4: new_max += 400; break;
 		}
 		if (new_max != _maxHp) {
 			// 체력 비율 유지
@@ -488,8 +509,8 @@ public:
 		info_packet.dir_y = player_->_dir_y;
 		info_packet.hp = player_->_hp;
 		info_packet.max_hp = player_->_maxHp;
-		info_packet.exp = 0;
-		info_packet.level = 1;
+		info_packet.exp = player_->_exp;
+		info_packet.level = player_->_level;
 		do_send(sizeof(S2C_AvatarInfo), reinterpret_cast<char*>(&info_packet));
 	}
 
@@ -539,11 +560,46 @@ public:
 	}
 	void send_move_packet(int mover, uint32_t timestamp);
 	void send_add_player(int player_id);
-	bool is_visible(int16_t x, int16_t y)
-	{
+	bool is_visible(int x, int y) {
 		return abs(x - player_->x_) <= VIEW_RANGE && abs(y - player_->y_) <= VIEW_RANGE;
 	}
 	void send_already_spawn_players();
+	
+	void save_to_db()
+	{
+		if (!player_) return;
+		
+		DBTask task;
+		task.type = DBTaskType::SAVE_USER_DATA;
+		task.ioType = static_cast<int>(io_type::db_save_position);
+		task.session_id = id_;
+		
+		player_data pd = {};
+		pd.x = player_->x_;
+		pd.y = player_->y_;
+		pd.hp = player_->_hp;
+		pd.max_hp = player_->_maxHp;
+		pd.level = player_->_level;
+		pd.exp = player_->_exp;
+		pd.gold = player_->_gold;
+		pd.armor_tier = static_cast<int>(player_->get_armor_tier());
+		pd.weapon_tier = static_cast<int>(player_->_weapon_tier);
+		pd.inventory = player_->inventory;
+		strncpy_s(pd.user_id, sizeof(pd.user_id), userId_, sizeof(pd.user_id) - 1);
+		
+		task.data = pd;
+		DBManager::Instance().PushTask(task);
+	}
+
+	void send_login_failure()
+	{
+		S2C_LoginResult ack_packet;
+		ack_packet.size = sizeof(S2C_LoginResult);
+		ack_packet.type = PACKET_TYPE::S2C_LOGIN_RESULT;
+		ack_packet.success = false;
+		strcpy_s(ack_packet.message, "Login failed.");
+		do_send(ack_packet.size, reinterpret_cast<char*>(&ack_packet));
+	}
 };
 
 tbb::concurrent_unordered_map<int, std::atomic<std::shared_ptr<SESSION>>> clients;
@@ -823,8 +879,8 @@ public:
 					stat.object_id  = pid;
 					stat.hp         = s->player_->_hp;
 					stat.max_hp     = s->player_->_maxHp;
-					stat.exp        = 0;
-					stat.level      = 1;
+					stat.exp        = s->player_->_exp;
+					stat.level      = s->player_->_level;
 					stat.armor_tier = s->player_->get_armor_tier();
 					stat.weapon_tier = s->player_->_weapon_tier;
 					s->do_send(stat.size, reinterpret_cast<char*>(&stat));
@@ -1132,7 +1188,8 @@ bool SESSION::proccess_packet(unsigned char* buff)
 		auto now = std::chrono::system_clock::now();
 
 		if (pkt->slot_id == 1) { // Health Potion
-			if (now >= player_->potion_cooldown_end_time_) {
+			if (player_->inventory[static_cast<int>(ItemType::HEALTH_POTION)] > 0 && now >= player_->potion_cooldown_end_time_) {
+				player_->inventory[static_cast<int>(ItemType::HEALTH_POTION)]--; // Consume 1 potion
 				player_->potion_cooldown_end_time_ = now + std::chrono::milliseconds(g_player_config.potion_cooldown_ms);
 				player_->_hp += g_player_config.potion_heal_amount;
 				player_->_hp = std::min(player_->_hp, player_->_maxHp);
@@ -1144,11 +1201,14 @@ bool SESSION::proccess_packet(unsigned char* buff)
 				stat.object_id = id_;
 				stat.hp = player_->_hp;
 				stat.max_hp = player_->_maxHp;
-				stat.exp = 0; // TODO: Track EXP in Player
-				stat.level = 1;
+				stat.exp = player_->_exp;
+				stat.level = player_->_level;
 				stat.armor_tier = player_->get_armor_tier();
 				stat.weapon_tier = player_->_weapon_tier;
 				do_send(stat.size, reinterpret_cast<char*>(&stat));
+
+				// Send inventory sync
+				send_inventory_sync();
 
 				visible_players_mutex.lock();
 				auto view_copy = visible_players;
@@ -1339,15 +1399,75 @@ bool SESSION::proccess_packet(unsigned char* buff)
 						npc->is_active = false;
 						
 						// Reward
+						int acquired_gold = 0;
 						if (npc->_dropItem > 0) {
 							player_->add_item(npc->_dropItem, 1);
 						}
 						if (npc->_dropGold > 0) {
-							player_->_gold += (rand() % npc->_dropGold + 1);
+							acquired_gold = (rand() % npc->_dropGold + 1);
+							player_->_gold += acquired_gold;
+						}
+						
+						bool leveled_up = player_->gain_exp(npc->_exp);
+						
+						// 항상 경험치가 갱신되었으므로 플레이어 본인에게 상태 변경 패킷 전송
+						S2C_StatusChange stat;
+						stat.size       = sizeof(stat);
+						stat.type       = S2C_STATUS_CHANGE;
+						stat.object_id  = id_;
+						stat.hp         = player_->_hp;
+						stat.max_hp     = player_->_maxHp;
+						stat.exp        = player_->_exp;
+						stat.level      = player_->_level;
+						stat.armor_tier = player_->get_armor_tier();
+						stat.weapon_tier = player_->_weapon_tier;
+						do_send(stat.size, reinterpret_cast<char*>(&stat));
+
+						if (leveled_up) {
+							// 주변 플레이어들에게 레벨업 및 상태 변경 브로드캐스트
+							for (auto& pid : view_copy) {
+								std::shared_ptr<SESSION> s = clients[pid].load();
+								if (s && s->state_ == client_state::playing) {
+									s->do_send(stat.size, reinterpret_cast<char*>(&stat));
+								}
+							}
+							
+							// 레벨업 이펙트를 위한 텍스트 (클라이언트에서 S2C_StatusChange의 level을 감지하여 파티클을 띄울 수 있음)
+							S2C_ChatMessage lvl_msg;
+							lvl_msg.size = sizeof(lvl_msg);
+							lvl_msg.type = S2C_CHAT_MESSAGE;
+							lvl_msg.object_id = id_; // 자신 머리 위에 출력하도록 변경
+							std::string msg = "레벨 업! 현재 레벨: " + std::to_string(player_->_level);
+							strncpy_s(lvl_msg.message, msg.c_str(), sizeof(lvl_msg.message));
+							do_send(lvl_msg.size, reinterpret_cast<char*>(&lvl_msg));
+							
+							// 주변 사람들에게도 레벨업 메시지 출력
+							for (auto& pid : view_copy) {
+								std::shared_ptr<SESSION> s = clients[pid].load();
+								if (s && s->state_ == client_state::playing) {
+									s->do_send(lvl_msg.size, reinterpret_cast<char*>(&lvl_msg));
+								}
+							}
 						}
 						
 						// Send inventory sync
 						send_inventory_sync();
+
+						// Send System Chat Message for loot
+						if (npc->_dropItem > 0 || acquired_gold > 0) {
+							S2C_ChatMessage chat_pkt;
+							chat_pkt.size = sizeof(chat_pkt);
+							chat_pkt.type = S2C_CHAT_MESSAGE;
+							chat_pkt.object_id = -1; // System message (Unknown)
+							std::string msg = "아이템 획득: ";
+							if (npc->_dropItem > 0) msg += "Item_ID[" + std::to_string(npc->_dropItem) + "] 1개 ";
+							if (acquired_gold > 0) msg += "Gold " + std::to_string(acquired_gold);
+							strncpy_s(chat_pkt.message, msg.c_str(), sizeof(chat_pkt.message));
+							do_send(chat_pkt.size, reinterpret_cast<char*>(&chat_pkt));
+						}
+
+						// 재사용 함수를 이용해 획득 즉시 DB 안전 저장!
+						save_to_db();
 
 						// Broadcast remove
 						S2C_RemoveObject rm_pkt;
@@ -1413,8 +1533,8 @@ bool SESSION::proccess_packet(unsigned char* buff)
 		stat.object_id = id_;
 		stat.hp = player_->_hp;
 		stat.max_hp = player_->_maxHp;
-		stat.exp = 0;
-		stat.level = 1;
+		stat.exp = player_->_exp;
+		stat.level = player_->_level;
 		stat.armor_tier = player_->get_armor_tier();
 		stat.weapon_tier = player_->_weapon_tier;
 		do_send(stat.size, reinterpret_cast<char*>(&stat));
@@ -1487,6 +1607,11 @@ void SESSION::send_add_player(int player_id)
 	add_packet.weapon_tier = session->player_->_weapon_tier;
 	add_packet.dir_x = session->player_->_dir_x;
 	add_packet.dir_y = session->player_->_dir_y;
+	add_packet.hp = session->player_->_hp;
+	add_packet.max_hp = session->player_->_maxHp;
+	add_packet.exp = session->player_->_exp;
+	add_packet.level = session->player_->_level;
+	add_packet.visual_id = 0;
 
 	visible_players_mutex.lock();
 	if (visible_players.contains(player_id))
@@ -1598,20 +1723,8 @@ void client_disconnect(int client_id)
 	if (nullptr != cl && cl->player_) {
 		cl->state_ = client_state::logout;
 		
-		// DB 저장 태스크 큐에 푸시
-		DBTask task;
-		task.type = DBTaskType::SAVE_USER_DATA;
-		task.ioType = static_cast<int>(io_type::db_save_position);
-		task.session_id = client_id;
-		
-		player_data pd = {};
-		pd.x = cl->player_->x_;
-		pd.y = cl->player_->y_;
-		pd.armor_tier = cl->player_->get_armor_tier();
-		pd.weapon_tier = cl->player_->_weapon_tier;
-		strncpy_s(pd.user_id, sizeof(pd.user_id), cl->userId_, sizeof(pd.user_id) - 1);
-		task.data = pd;
-		DBManager::Instance().PushTask(task);
+		// 간편하게 DB 저장 호출!
+		cl->save_to_db();
 
 		broadcast_player_remove_packet(cl->id_);
 		sector.remove_object(cl->id_, cl->player_->x_, cl->player_->y_);
@@ -2038,8 +2151,8 @@ void worker_thread()
 						stat.object_id  = pid;
 						stat.hp         = ps->player_->_hp;
 						stat.max_hp     = ps->player_->_maxHp;
-						stat.exp        = 0;
-						stat.level      = 1;
+						stat.exp        = ps->player_->_exp;
+						stat.level      = ps->player_->_level;
 						stat.armor_tier = ps->player_->get_armor_tier();
 						stat.weapon_tier = ps->player_->_weapon_tier;
 						ps->do_send(stat.size, reinterpret_cast<char*>(&stat));
@@ -2074,13 +2187,21 @@ void worker_thread()
 						new_session->player_->y_ = result.y;
 						new_session->player_->_armor = result.armor_tier;
 						new_session->player_->_weapon_tier = result.weapon_tier;
-						new_session->player_->update_max_hp();
+						new_session->player_->_hp = result.hp;
+						new_session->player_->_maxHp = result.max_hp;
+						new_session->player_->_level = result.level;
+						new_session->player_->_exp = result.exp;
+						new_session->player_->_gold = result.gold;
+						new_session->player_->inventory = result.inventory;
+						// Update max HP if armor affects it, but since DB stores max_hp, we use DB value unless we want to recalculate
+						// new_session->player_->update_max_hp();
 						
 						strncpy_s(new_session->userId_, sizeof(new_session->userId_), result.user_id, sizeof(new_session->userId_) - 1);
 						strncpy_s(new_session->player_->userName_, sizeof(new_session->player_->userName_), result.user_name, MAX_NAME_LEN);
 						
 						sector.add_object(id, new_session->player_->x_, new_session->player_->y_);
 						new_session->send_avatar_info();
+						new_session->send_inventory_sync();
 						new_session->send_already_spawn_players();
 						broadcast_new_player(id);
 						new_session->state_ = client_state::playing;
@@ -2132,7 +2253,7 @@ int main()
 		EXP_OVER* over = new EXP_OVER;
 		over->type = static_cast<io_type>(io_type_val);
 		over->db_task = task;
-		PostQueuedCompletionStatus(h_iocp, 0, session_id, &over->over);
+		PostQueuedCompletionStatus(h_iocp, 1, session_id, &over->over);
 	});
 	DBManager::Instance().StartDBThread();
 

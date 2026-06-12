@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 constexpr short PORT = 3500;
 constexpr int WORLD_WIDTH = 2000;
@@ -9,6 +9,7 @@ constexpr int NPC_ID_START = 1000000;
 constexpr int NPC_MOVE_INTERVAL = 1000; // in milliseconds
 constexpr int MAX_NAME_LEN = 20;
 constexpr int MAX_CHAT_MSG_LEN = 200;
+constexpr int MAX_INVENTORY_SLOTS = 20;
 
 enum PACKET_TYPE {
 	C2S_LOGIN,			// Client to Server: Login request
@@ -47,6 +48,19 @@ enum class NpcState : char {
 	ATTACKING = 3, // 공격 중 (예약)
 	FLEEING = 4,   // 도주 중 (크리퍼 제외)
 	DEAD     = 5,  // 사망
+};
+
+enum class ItemType : int {
+	NONE = 0,
+	ROTTEN_FLESH = 1, // 썩은 고기
+	BONE = 2,         // 뼈다귀
+	GUNPOWDER = 3,    // 화약
+	IRON_INGOT = 4,   // 철 주괴
+	GOLD_INGOT = 5,   // 금 주괴
+	DIAMOND = 6,      // 다이아몬드
+	
+	HEALTH_POTION = 7,
+	MANA_POTION = 8,
 };
 
 #pragma pack(push, 1) // Ensure no padding between struct members
@@ -196,7 +210,6 @@ struct ItemSlot {
 	int count;
 };
 
-constexpr int MAX_INVENTORY_SLOTS = 20;
 
 struct S2C_InventorySync {
 	unsigned char size;

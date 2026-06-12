@@ -81,12 +81,14 @@ LRESULT CALLBACK window_proc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lPar
 		if (wParam == '1' || wParam == '2') {
 			auto now = std::chrono::steady_clock::now();
 			if (wParam == '1' && std::chrono::duration_cast<std::chrono::milliseconds>(now - gm->last_potion_use()).count() >= 5000) {
-				gm->start_potion_cooldown();
-				C2S_UseQuickSlot p;
-				p.size = sizeof(p);
-				p.type = C2S_USE_QUICKSLOT;
-				p.slot_id = 1;
-				NetworkManager::Instance()->send_packet(&p);
+				if (gm->my_inventory()[static_cast<int>(ItemType::HEALTH_POTION)] > 0) {
+					gm->start_potion_cooldown();
+					C2S_UseQuickSlot p;
+					p.size = sizeof(p);
+					p.type = C2S_USE_QUICKSLOT;
+					p.slot_id = 1;
+					NetworkManager::Instance()->send_packet(&p);
+				}
 			} else if (wParam == '2' && std::chrono::duration_cast<std::chrono::milliseconds>(now - gm->last_skill_use()).count() >= 15000) {
 				gm->start_skill_cooldown();
 				C2S_UseQuickSlot p;
@@ -174,7 +176,7 @@ int WINAPI WinMain(HINSTANCE hI, HINSTANCE hP, LPSTR lp, int nS) {
 	RegisterClass(&wc);
 
 	HWND hWnd = CreateWindowEx(0, CLASS_NAME, L"Chess Client - PKJ", WS_OVERLAPPEDWINDOW,
-		CW_USEDEFAULT, CW_USEDEFAULT, 600, 600, NULL, NULL, hI, NULL);
+		CW_USEDEFAULT, CW_USEDEFAULT, 1280, 720, NULL, NULL, hI, NULL);
 
 	AllocConsole();
 	FILE* f;

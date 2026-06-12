@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 #include <string>
 #include <chrono>
 
@@ -17,6 +17,8 @@ public:
 	int visual_id = 0;
 	int hp = 100;
 	int max_hp = 100;
+	unsigned long long exp = 0;
+	unsigned char level = 1;
 
 	// In-game Chat Bubble
 	std::wstring chat_msg;
