@@ -269,6 +269,28 @@ void NetworkManager::process_packet(char* ptr)
 		}
 		break;
 	}
+	case S2C_OPEN_TRADE_UI:
+	{
+		S2C_OpenTradeUI* p = reinterpret_cast<S2C_OpenTradeUI*>(ptr);
+		gm->set_trading(true);
+		gm->set_trade_npc_id(p->npc_id);
+		gm->set_trade_visual_id(p->visual_id);
+		std::cout << "Opened Trade UI for NPC ID=" << p->npc_id << ", VisualID=" << p->visual_id << "\n";
+		break;
+	}
+	case S2C_TRADE_RESULT:
+	{
+		S2C_TradeResult* p = reinterpret_cast<S2C_TradeResult*>(ptr);
+		std::string msg_str = p->message;
+		int wlen = MultiByteToWideChar(CP_ACP, 0, msg_str.c_str(), -1, NULL, 0);
+		std::wstring wmsg(wlen, 0);
+		MultiByteToWideChar(CP_ACP, 0, msg_str.c_str(), -1, &wmsg[0], wlen);
+		if (!wmsg.empty() && wmsg.back() == L'\0') wmsg.pop_back();
+
+		std::wstring logMsg = L"[상인] " + wmsg;
+		gm->add_chat_log(logMsg);
+		break;
+	}
 	default:
 		std::cout << "Unknown packet type: " << (int)type << "\n";
 		__debugbreak();

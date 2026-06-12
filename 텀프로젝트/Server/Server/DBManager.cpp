@@ -167,7 +167,7 @@ void DBManager::HandleLoginAuth(DBTask& task) {
 					SQLGetData(hstmt, 11, SQL_C_SLONG, &tmp_gold, sizeof(tmp_gold), &ind);
 
 					auto rtrim = [](char* str) {
-						int len = strnlen_s(str, MAX_NAME_LEN);
+						int len = static_cast<int>(strnlen_s(str, MAX_NAME_LEN));
 						while (len > 0 && str[len - 1] == ' ') {
 							str[len - 1] = '\0';
 							len--;

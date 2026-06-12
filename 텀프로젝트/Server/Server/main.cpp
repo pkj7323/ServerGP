@@ -1,4 +1,4 @@
-#define NOMINMAX
+﻿#define NOMINMAX
 #include <algorithm>
 #include <iostream>
 #include <WS2tcpip.h>
@@ -370,6 +370,17 @@ public:
 			float ratio = (float)_hp / _maxHp;
 			_maxHp = new_max;
 			_hp = (int)(_maxHp * ratio);
+		}
+	}
+
+	void set_armor_tier(int next_tier)
+	{
+		switch (next_tier) {
+			case 1: _armor = g_armor_config.copper; break;
+			case 2: _armor = g_armor_config.iron; break;
+			case 3: _armor = g_armor_config.diamond; break;
+			case 4: _armor = g_armor_config.netherite; break;
+			default: _armor = 0; break;
 		}
 	}
 };
@@ -812,8 +823,8 @@ public:
 					stat.object_id  = action.target_id;
 					stat.hp         = s->player_->_hp;
 					stat.max_hp     = s->player_->_maxHp;
-					stat.exp        = 0;
-					stat.level      = 1;
+					stat.exp        = s->player_->_exp;
+					stat.level      = s->player_->_level;
 					stat.armor_tier = s->player_->get_armor_tier();
 					stat.weapon_tier = s->player_->_weapon_tier;
 					s->do_send(stat.size, reinterpret_cast<char*>(&stat));
@@ -952,6 +963,8 @@ public:
 		{
 			return;
 		}
+
+		if (_aiState == NpcState::MERCHANT) return; // Do not schedule AI ticks for merchants
 
 		event_type ev;
 		ev.obj_id = id_;
@@ -1131,6 +1144,7 @@ bool SESSION::proccess_packet(unsigned char* buff)
 					add_pkt.weapon_tier = 0;
 					add_pkt.dir_x = 0;
 					add_pkt.dir_y = -1;
+					add_pkt.npc_state = static_cast<char>(npc->_aiState);
 					do_send(add_pkt.size, reinterpret_cast<char*>(&add_pkt));
 
 					npc->wake_up();
@@ -1327,6 +1341,7 @@ bool SESSION::proccess_packet(unsigned char* buff)
 			if (is_npc_id(oid)) {
 				auto npc = npcs[oid].load();
 				if (!npc || !npc->is_active) continue;
+				if (npc->_aiState == NpcState::MERCHANT) continue; // Prevent hitting merchants
 				bool hit = false;
 				for (auto& cell : attack_cells) {
 					if (npc->x_ == cell.first && npc->y_ == cell.second) {
@@ -1408,7 +1423,7 @@ bool SESSION::proccess_packet(unsigned char* buff)
 							player_->_gold += acquired_gold;
 						}
 						
-						bool leveled_up = player_->gain_exp(npc->_exp);
+						bool leveled_up = player_->gain_exp(static_cast<int>(npc->_exp));
 						
 						// 항상 경험치가 갱신되었으므로 플레이어 본인에게 상태 변경 패킷 전송
 						S2C_StatusChange stat;
@@ -1551,6 +1566,184 @@ bool SESSION::proccess_packet(unsigned char* buff)
 		break;
 	}
 
+	case PACKET_TYPE::C2S_INTERACT_NPC:
+	{
+		// Find closest NPC
+		auto nearby_ids = sector.get_objects_nearby_sector(player_->x_, player_->y_);
+		int closest_npc_id = -1;
+		int min_dist = 4; // Interact range is 3 tiles (Chebyshev distance)
+		int npc_visual_id = -1;
+
+		for (auto& oid : nearby_ids) {
+			if (is_npc_id(oid)) {
+				auto npc = npcs[oid].load();
+				if (!npc) continue;
+				if (npc->_aiState != NpcState::MERCHANT) continue;
+
+				int dist = std::max(std::abs(npc->x_ - player_->x_), std::abs(npc->y_ - player_->y_));
+				if (dist <= 3 && dist < min_dist) {
+					min_dist = dist;
+					closest_npc_id = oid;
+					npc_visual_id = npc->_visualId;
+				}
+			}
+		}
+
+		if (closest_npc_id != -1) {
+			S2C_OpenTradeUI trade_pkt;
+			trade_pkt.size = sizeof(trade_pkt);
+			trade_pkt.type = PACKET_TYPE::S2C_OPEN_TRADE_UI;
+			trade_pkt.npc_id = closest_npc_id;
+			trade_pkt.visual_id = npc_visual_id;
+			do_send(trade_pkt.size, reinterpret_cast<char*>(&trade_pkt));
+		}
+		break;
+	}
+	case PACKET_TYPE::C2S_TRADE_COMMAND:
+	{
+		C2S_TradeCommand* pkt = reinterpret_cast<C2S_TradeCommand*>(buff);
+		auto npc = npcs[pkt->npc_id].load();
+		if (!npc || npc->_aiState != NpcState::MERCHANT) break;
+
+		int dist = std::max(std::abs(npc->x_ - player_->x_), std::abs(npc->y_ - player_->y_));
+		if (dist > 5) break; // Too far
+
+		int v_id = npc->_visualId;
+		bool success = false;
+		std::string msg = "";
+
+		if (v_id == 6) { // Priest
+			if (pkt->trade_index == 1) { // Sell Rotten Flesh
+				if (player_->inventory[static_cast<int>(ItemType::ROTTEN_FLESH)] >= 10) {
+					player_->inventory[static_cast<int>(ItemType::ROTTEN_FLESH)] -= 10;
+					player_->_gold += 50;
+					success = true;
+					msg = "성직자: 훌륭한 전리품이군요. 50 골드를 드리겠습니다.";
+				} else { msg = "성직자: 썩은 고기가 부족합니다 (10개 필요)."; }
+			} else if (pkt->trade_index == 2) { // Sell Bone
+				if (player_->inventory[static_cast<int>(ItemType::BONE)] >= 5) {
+					player_->inventory[static_cast<int>(ItemType::BONE)] -= 5;
+					player_->_gold += 100;
+					success = true;
+					msg = "성직자: 훌륭한 전리품이군요. 100 골드를 드리겠습니다.";
+				} else { msg = "성직자: 뼈다귀가 부족합니다 (5개 필요)."; }
+			} else if (pkt->trade_index == 3) { // Sell Gunpowder
+				if (player_->inventory[static_cast<int>(ItemType::GUNPOWDER)] >= 3) {
+					player_->inventory[static_cast<int>(ItemType::GUNPOWDER)] -= 3;
+					player_->_gold += 150;
+					success = true;
+					msg = "성직자: 위험한 화약이군요. 150 골드를 드리겠습니다.";
+				} else { msg = "성직자: 화약이 부족합니다 (3개 필요)."; }
+			} else if (pkt->trade_index == 4) { // Sell Iron Ingot
+				if (player_->inventory[static_cast<int>(ItemType::IRON_INGOT)] >= 1) {
+					player_->inventory[static_cast<int>(ItemType::IRON_INGOT)] -= 1;
+					player_->_gold += 200;
+					success = true;
+					msg = "성직자: 귀한 철괴군요. 200 골드를 드리겠습니다.";
+				} else { msg = "성직자: 철괴가 부족합니다 (1개 필요)."; }
+			} else if (pkt->trade_index == 5) { // Sell Diamond
+				if (player_->inventory[static_cast<int>(ItemType::DIAMOND)] >= 1) {
+					player_->inventory[static_cast<int>(ItemType::DIAMOND)] -= 1;
+					player_->_gold += 500;
+					success = true;
+					msg = "성직자: 눈부신 다이아몬드군요! 500 골드를 드리겠습니다.";
+				} else { msg = "성직자: 다이아몬드가 부족합니다 (1개 필요)."; }
+			} else if (pkt->trade_index == 6) { // Buy Potion
+				if (player_->_gold >= 30) {
+					player_->_gold -= 30;
+					player_->inventory[static_cast<int>(ItemType::HEALTH_POTION)] += 1;
+					success = true;
+					msg = "성직자: 신의 축복이 담긴 포션입니다.";
+				} else { msg = "성직자: 골드가 부족합니다 (30G 필요)."; }
+			}
+		} else if (v_id == 7) { // Armorer
+			if (pkt->trade_index == 1) {
+				int next_tier = player_->get_armor_tier() + 1;
+				if (next_tier > 4) { msg = "대장장이: 이미 최고 등급의 갑옷을 입고 있군!"; }
+				else {
+					int cost = next_tier * 150;
+					if (player_->_gold >= cost) {
+						player_->_gold -= cost;
+						player_->set_armor_tier(next_tier);
+						success = true;
+						msg = "대장장이: 새 갑옷이 아주 잘 어울리는군!";
+					} else { msg = "대장장이: 골드가 부족하네 (" + std::to_string(cost) + "G 필요)."; }
+				}
+			}
+		} else if (v_id == 8) { // Weaponsmith
+			if (pkt->trade_index == 1) {
+				int next_tier = player_->_weapon_tier + 1;
+				if (next_tier > 6) { msg = "무기장인: 그 무기는 더 이상 단련할 수 없다!"; }
+				else {
+					int cost = next_tier * 100;
+					int level_req = next_tier * 5;
+					if (player_->_level < level_req) {
+						msg = "무기장인: 레벨이 너무 낮군! (" + std::to_string(level_req) + " 이상 필요)";
+					} else if (player_->_gold >= cost) {
+						player_->_gold -= cost;
+						player_->_weapon_tier = next_tier;
+						success = true;
+						msg = "무기장인: 아주 날카롭게 벼려두었다!";
+					} else { msg = "무기장인: 골드가 부족하다 (" + std::to_string(cost) + "G 필요)."; }
+				}
+			}
+		} else if (v_id == 9) { // Librarian (Enchanter)
+			if (pkt->trade_index == 1) {
+				if (player_->_weapon_tier < 1) { msg = "사서: 빈손에는 마법을 부여할 수 없어요."; }
+				else if (player_->_gold >= 500) {
+					player_->_gold -= 500;
+					int chance = rand() % 100;
+					if (chance < 30) { // 30% chance
+						if (player_->_weapon_tier < 6) {
+							player_->_weapon_tier++;
+							success = true;
+							msg = "사서: 놀랍군요! 마법 부여에 완벽히 성공했습니다!";
+						} else { msg = "사서: 앗, 이미 더 이상 부여할 수 없는 상태네요."; }
+					} else {
+						msg = "사서: 이런... 마법 부여에 실패하고 말았습니다.";
+					}
+					// Always send status update because gold changed
+					success = true; 
+				} else { msg = "사서: 연구 기금(골드)이 부족하네요 (500G 필요)."; }
+			}
+		}
+
+		if (success) {
+			send_inventory_sync();
+			S2C_StatusChange stat;
+			stat.size = sizeof(stat);
+			stat.type = PACKET_TYPE::S2C_STATUS_CHANGE;
+			stat.object_id = id_;
+			stat.hp = player_->_hp;
+			stat.max_hp = player_->_maxHp;
+			stat.exp = player_->_exp;
+			stat.level = player_->_level;
+			stat.armor_tier = player_->get_armor_tier();
+			stat.weapon_tier = player_->_weapon_tier;
+			do_send(stat.size, reinterpret_cast<char*>(&stat));
+
+			visible_players_mutex.lock();
+			auto view_copy = visible_players;
+			visible_players_mutex.unlock();
+			for (auto& pid : view_copy) {
+				std::shared_ptr<SESSION> s = clients[pid].load();
+				if (s && s->state_ == client_state::playing) {
+					s->do_send(stat.size, reinterpret_cast<char*>(&stat));
+				}
+			}
+			save_to_db(); // DB 저장
+		}
+
+		S2C_TradeResult res_pkt;
+		res_pkt.size = sizeof(res_pkt);
+		res_pkt.type = PACKET_TYPE::S2C_TRADE_RESULT;
+		res_pkt.success = success;
+		strncpy_s(res_pkt.message, msg.c_str(), sizeof(res_pkt.message) - 1);
+		do_send(res_pkt.size, reinterpret_cast<char*>(&res_pkt));
+
+		break;
+	}
+
 	default:
 		std::cout << "Unknown Packet Type from Client[" << id_ << "]" << std::endl;
 		return false;
@@ -1649,6 +1842,7 @@ void SESSION::send_already_spawn_players()
 					add_pkt.weapon_tier = 0;
 					add_pkt.dir_x = 0;
 					add_pkt.dir_y = -1;
+					add_pkt.npc_state = static_cast<char>(npc->_aiState);
 					do_send(add_pkt.size, reinterpret_cast<char*>(&add_pkt));
 
 					visible_players_mutex.lock();
@@ -1771,6 +1965,8 @@ void npc_initialize()
 	// ── Step 2. map_spawn.bin에서 스폰 위치 로드 ─────────────────────────────
 	std::cout << "[Server] Loading map_spawn.bin..." << std::endl;
 	auto spawn_entries = load_spawn_map(spawn_path.c_str());
+	auto merchant_entries = load_merchant_spawns_lua(lua_path.c_str());
+	spawn_entries.insert(spawn_entries.end(), merchant_entries.begin(), merchant_entries.end());
 
 	if (spawn_entries.empty()) {
 		std::cerr << "[Server][FATAL] 스폰 데이터 없음! 경로 확인: "
@@ -1794,12 +1990,14 @@ void npc_initialize()
 		npc->_visualId = m.visual_id;
 		npc->_hp       = m.hp;
 		npc->_maxHp    = m.max_hp;
-		npc->_visualId = m.visual_id;
 		npc->_level    = static_cast<unsigned char>(m.level);
 		npc->_exp      = m.exp;
 		npc->_attack   = m.attack;
 		npc->_dropItem = m.drop_item;
 		npc->_dropGold = m.drop_gold;
+		if (entry.type_id >= 6) {
+			npc->_aiState = NpcState::MERCHANT;
+		}
 		strncpy_s(npc->userName_, m.name.c_str(), sizeof(npc->userName_) - 1);
 
 		npcs[npc_id] = npc;
@@ -2079,6 +2277,7 @@ void worker_thread()
 					add_pkt.weapon_tier = 0;
 					add_pkt.dir_x = 0;
 					add_pkt.dir_y = -1;
+					add_pkt.npc_state = static_cast<char>(npc->_aiState);
 					
 					for (auto pid : sector.get_objects_nearby_sector(npc->x_, npc->y_)) {
 						if (!is_npc_id(pid)) {

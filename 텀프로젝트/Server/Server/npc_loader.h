@@ -47,12 +47,12 @@ struct SpawnEntry {
 
 // =============================================================================
 // load_npc_config_lua()
-//   npc_config.lua를 Lua VM으로 읽어 NPC_TYPES[1~5]를 NpcMeta 배열로 반환.
+//   npc_config.lua를 Lua VM으로 읽어 NPC_TYPES[1~9]를 NpcMeta 배열로 반환.
 //   인덱스 0은 NPC_NONE (빈 값).
 // =============================================================================
-inline std::array<NpcMeta, 6> load_npc_config_lua(const char* lua_path)
+inline std::array<NpcMeta, 10> load_npc_config_lua(const char* lua_path)
 {
-	std::array<NpcMeta, 6> meta{};
+	std::array<NpcMeta, 10> meta{};
 
 	lua_State* L = luaL_newstate();
 	luaL_openlibs(L);
@@ -71,7 +71,7 @@ inline std::array<NpcMeta, 6> load_npc_config_lua(const char* lua_path)
 		return meta;
 	}
 
-	for (int type_id = 1; type_id <= 5; ++type_id)
+	for (int type_id = 1; type_id <= 9; ++type_id)
 	{
 		lua_pushinteger(L, type_id);
 		lua_gettable(L, -2);   // NPC_TYPES[type_id]
@@ -115,6 +115,61 @@ inline std::array<NpcMeta, 6> load_npc_config_lua(const char* lua_path)
 	lua_close(L);
 
 	return meta;
+}
+
+// =============================================================================
+// load_merchant_spawns_lua()
+//   npc_config.lua를 읽어 MERCHANT_SPAWNS 테이블에서 고정 스폰 좌표를 반환합니다.
+// =============================================================================
+inline std::vector<SpawnEntry> load_merchant_spawns_lua(const char* lua_path)
+{
+	std::vector<SpawnEntry> spawns;
+
+	lua_State* L = luaL_newstate();
+	luaL_openlibs(L);
+
+	if (luaL_dofile(L, lua_path) != LUA_OK) {
+		std::cerr << "[NpcLoader][ERROR] Lua 로드 실패 (MERCHANT_SPAWNS): "
+				  << lua_tostring(L, -1) << std::endl;
+		lua_close(L);
+		return spawns;
+	}
+
+	lua_getglobal(L, "MERCHANT_SPAWNS");
+	if (!lua_istable(L, -1)) {
+		std::cerr << "[NpcLoader][ERROR] MERCHANT_SPAWNS 테이블이 없습니다." << std::endl;
+		lua_close(L);
+		return spawns;
+	}
+
+	int len = static_cast<int>(lua_rawlen(L, -1));
+	for (int i = 1; i <= len; ++i) {
+		lua_rawgeti(L, -1, i); // push MERCHANT_SPAWNS[i]
+		if (lua_istable(L, -1)) {
+			SpawnEntry e{};
+			
+			lua_getfield(L, -1, "type_id");
+			e.type_id = static_cast<uint8_t>(lua_tointeger(L, -1));
+			lua_pop(L, 1);
+
+			lua_getfield(L, -1, "x");
+			e.x = static_cast<int16_t>(lua_tointeger(L, -1));
+			lua_pop(L, 1);
+
+			lua_getfield(L, -1, "y");
+			e.y = static_cast<int16_t>(lua_tointeger(L, -1));
+			lua_pop(L, 1);
+
+			spawns.push_back(e);
+			std::cout << "[NpcLoader] 상인 스폰 등록: Type[" << (int)e.type_id 
+					  << "] 위치(" << e.x << ", " << e.y << ")\n";
+		}
+		lua_pop(L, 1); // pop MERCHANT_SPAWNS[i]
+	}
+
+	lua_pop(L, 1); // pop MERCHANT_SPAWNS
+	lua_close(L);
+	return spawns;
 }
 
 // =============================================================================

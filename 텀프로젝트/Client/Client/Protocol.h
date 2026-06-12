@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 constexpr short PORT = 3500;
 constexpr int WORLD_WIDTH = 2000;
@@ -226,6 +226,7 @@ struct ItemSlot {
 	int item_id;
 	int count;
 };
+
 
 struct S2C_InventorySync {
 	unsigned char size;

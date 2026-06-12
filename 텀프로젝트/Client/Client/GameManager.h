@@ -72,6 +72,13 @@ public:
 	int my_gold() const { return _myGold; }
 	void set_my_gold(int g) { _myGold = g; }
 
+	bool is_trading() const { return _isTrading; }
+	void set_trading(bool val) { _isTrading = val; }
+	int trade_npc_id() const { return _tradeNpcId; }
+	void set_trade_npc_id(int val) { _tradeNpcId = val; }
+	int trade_visual_id() const { return _tradeVisualId; }
+	void set_trade_visual_id(int val) { _tradeVisualId = val; }
+
 	std::unordered_map<int, int>& my_inventory() { return _myInventory; }
 
 	std::vector<AttackEffect>& attack_effects() { return _attackEffects; }
@@ -100,6 +107,10 @@ private:
 	std::chrono::time_point<std::chrono::steady_clock> _last_potion_use;
 	std::chrono::time_point<std::chrono::steady_clock> _last_skill_use;
 	std::chrono::time_point<std::chrono::steady_clock> _buff_end_time;
+
+	bool _isTrading = false;
+	int _tradeNpcId = -1;
+	int _tradeVisualId = -1;
 
 	std::array<uint8_t, WORLD_WIDTH* WORLD_HEIGHT> _visualMap{};
 	std::array<uint8_t, WORLD_WIDTH* WORLD_HEIGHT> _collisionMap{};

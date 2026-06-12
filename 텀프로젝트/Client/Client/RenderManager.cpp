@@ -2,6 +2,8 @@
 #include "RenderManager.h"
 #include "GameManager.h"
 
+#pragma comment(lib, "msimg32.lib")
+
 static void DrawChatBubbles(Gdiplus::Graphics& graphics, Gdiplus::Font& font, float left_x, float bottom_y, int cellWidth, int cellHeight, std::unordered_map<int, Object>& obj_map) {
 	for (auto& [id, obj] : obj_map) {
 		if (obj.chat_msg.empty()) continue;
@@ -38,7 +40,7 @@ RenderManager::~RenderManager()
 	}
 	for (int i = 1; i <= 4; ++i) {
 		if (_helmets[i]) {
-			delete _helmets[i];
+			DeleteObject(_helmets[i]);
 			_helmets[i] = nullptr;
 		}
 	}
@@ -48,20 +50,20 @@ RenderManager::~RenderManager()
 			_swords[i] = nullptr;
 		}
 	}
-	if (_player_head) { delete _player_head; _player_head = nullptr; }
-	for (int i = 1; i <= 5; ++i) {
-		if (_mob_heads[i]) { delete _mob_heads[i]; _mob_heads[i] = nullptr; }
+	if (_player_head) { DeleteObject(_player_head); _player_head = nullptr; }
+	for (int i = 1; i <= 9; ++i) {
+		if (_mob_heads[i]) { DeleteObject(_mob_heads[i]); _mob_heads[i] = nullptr; }
 	}
-	if (_gold_icon) { delete _gold_icon; _gold_icon = nullptr; }
+	if (_gold_icon) { DeleteObject(_gold_icon); _gold_icon = nullptr; }
 	for (int i = 0; i < 20; ++i) {
-		if (_item_images[i]) { delete _item_images[i]; _item_images[i] = nullptr; }
+		if (_item_images[i]) { DeleteObject(_item_images[i]); _item_images[i] = nullptr; }
 	}
-	if (_grass_img) { delete _grass_img; _grass_img = nullptr; }
-	if (_oak_sapling_img) { delete _oak_sapling_img; _oak_sapling_img = nullptr; }
-	if (_spruce_sapling_img) { delete _spruce_sapling_img; _spruce_sapling_img = nullptr; }
-	if (_cactus_img) { delete _cactus_img; _cactus_img = nullptr; }
-	if (_health_potion_img) { delete _health_potion_img; _health_potion_img = nullptr; }
-	if (_blaze_powder_img) { delete _blaze_powder_img; _blaze_powder_img = nullptr; }
+	if (_grass_img) { DeleteObject(_grass_img); _grass_img = nullptr; }
+	if (_oak_sapling_img) { DeleteObject(_oak_sapling_img); _oak_sapling_img = nullptr; }
+	if (_spruce_sapling_img) { DeleteObject(_spruce_sapling_img); _spruce_sapling_img = nullptr; }
+	if (_cactus_img) { DeleteObject(_cactus_img); _cactus_img = nullptr; }
+	if (_health_potion_img) { DeleteObject(_health_potion_img); _health_potion_img = nullptr; }
+	if (_blaze_powder_img) { DeleteObject(_blaze_powder_img); _blaze_powder_img = nullptr; }
 	if (_arrow_img) { delete _arrow_img; _arrow_img = nullptr; }
 }
 
@@ -73,7 +75,7 @@ void RenderManager::Release()
 	}
 	for (int i = 1; i <= 4; ++i) {
 		if (_helmets[i]) {
-			delete _helmets[i];
+			DeleteObject(_helmets[i]);
 			_helmets[i] = nullptr;
 		}
 	}
@@ -83,20 +85,20 @@ void RenderManager::Release()
 			_swords[i] = nullptr;
 		}
 	}
-	if (_player_head) { delete _player_head; _player_head = nullptr; }
-	for (int i = 1; i <= 5; ++i) {
-		if (_mob_heads[i]) { delete _mob_heads[i]; _mob_heads[i] = nullptr; }
+	if (_player_head) { DeleteObject(_player_head); _player_head = nullptr; }
+	for (int i = 1; i <= 9; ++i) {
+		if (_mob_heads[i]) { DeleteObject(_mob_heads[i]); _mob_heads[i] = nullptr; }
 	}
-	if (_gold_icon) { delete _gold_icon; _gold_icon = nullptr; }
+	if (_gold_icon) { DeleteObject(_gold_icon); _gold_icon = nullptr; }
 	for (int i = 0; i < 20; ++i) {
-		if (_item_images[i]) { delete _item_images[i]; _item_images[i] = nullptr; }
+		if (_item_images[i]) { DeleteObject(_item_images[i]); _item_images[i] = nullptr; }
 	}
-	if (_grass_img) { delete _grass_img; _grass_img = nullptr; }
-	if (_oak_sapling_img) { delete _oak_sapling_img; _oak_sapling_img = nullptr; }
-	if (_spruce_sapling_img) { delete _spruce_sapling_img; _spruce_sapling_img = nullptr; }
-	if (_cactus_img) { delete _cactus_img; _cactus_img = nullptr; }
-	if (_health_potion_img) { delete _health_potion_img; _health_potion_img = nullptr; }
-	if (_blaze_powder_img) { delete _blaze_powder_img; _blaze_powder_img = nullptr; }
+	if (_grass_img) { DeleteObject(_grass_img); _grass_img = nullptr; }
+	if (_oak_sapling_img) { DeleteObject(_oak_sapling_img); _oak_sapling_img = nullptr; }
+	if (_spruce_sapling_img) { DeleteObject(_spruce_sapling_img); _spruce_sapling_img = nullptr; }
+	if (_cactus_img) { DeleteObject(_cactus_img); _cactus_img = nullptr; }
+	if (_health_potion_img) { DeleteObject(_health_potion_img); _health_potion_img = nullptr; }
+	if (_blaze_powder_img) { DeleteObject(_blaze_powder_img); _blaze_powder_img = nullptr; }
 	if (_arrow_img) { delete _arrow_img; _arrow_img = nullptr; }
 }
 
@@ -113,6 +115,7 @@ void RenderManager::Render(HWND hWnd)
 	HDC memDC = CreateCompatibleDC(hdc);
 	HBITMAP memBitmap = CreateCompatibleBitmap(hdc, width, height);
 	HBITMAP oldBitmap = (HBITMAP)SelectObject(memDC, memBitmap);
+	HDC memDC2 = CreateCompatibleDC(hdc);
 
 	// --- GDI+ UI Rendering (Graphics instance pulled up for head and tile rendering) ---
 	Gdiplus::Graphics graphics(memDC);
@@ -189,7 +192,7 @@ static auto last_time = std::chrono::steady_clock::now();
 			}
 
 			if (tile_id == 1 && _grass_img) {
-				graphics.DrawImage(_grass_img, (int)rect.left, (int)rect.top, (int)(rect.right - rect.left), (int)(rect.bottom - rect.top));
+				DrawBmpTransparent(memDC, memDC2, _grass_img, rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top);
 			} else {
 				HBRUSH hBrush = CreateSolidBrush(color);
 				FillRect(memDC, &rect, hBrush);
@@ -197,11 +200,11 @@ static auto last_time = std::chrono::steady_clock::now();
 			}
 
 			if (is_oak && _oak_sapling_img) {
-				graphics.DrawImage(_oak_sapling_img, (int)rect.left, (int)rect.top, (int)(rect.right - rect.left), (int)(rect.bottom - rect.top));
+				DrawBmpTransparent(memDC, memDC2, _oak_sapling_img, rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top);
 			} else if (is_spruce && _spruce_sapling_img) {
-				graphics.DrawImage(_spruce_sapling_img, (int)rect.left, (int)rect.top, (int)(rect.right - rect.left), (int)(rect.bottom - rect.top));
+				DrawBmpTransparent(memDC, memDC2, _spruce_sapling_img, rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top);
 			} else if (is_cactus && _cactus_img) {
-				graphics.DrawImage(_cactus_img, (int)rect.left, (int)rect.top, (int)(rect.right - rect.left), (int)(rect.bottom - rect.top));
+				DrawBmpTransparent(memDC, memDC2, _cactus_img, rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top);
 			}
 		}
 	}
@@ -226,8 +229,8 @@ static auto last_time = std::chrono::steady_clock::now();
 			int imgW = cellWidth - padX * 2;
 			int imgH = cellHeight - padY * 2;
 
-			if (npc.visual_id > 0 && npc.visual_id <= 5 && _mob_heads[npc.visual_id]) {
-				graphics.DrawImage(_mob_heads[npc.visual_id], px, py, imgW, imgH);
+			if (npc.visual_id > 0 && npc.visual_id <= 9 && _mob_heads[npc.visual_id]) {
+				DrawBmpTransparent(memDC, memDC2, _mob_heads[npc.visual_id], px, py, imgW, imgH);
 			} else {
 				HBRUSH hBrush = CreateSolidBrush(RGB(0, 255, 0));
 				HBRUSH oldB = (HBRUSH)SelectObject(memDC, hBrush);
@@ -267,7 +270,7 @@ static auto last_time = std::chrono::steady_clock::now();
 			int imgH = cellHeight - padY * 2;
 
 			if (_player_head) {
-				graphics.DrawImage(_player_head, px, py, imgW, imgH);
+				DrawBmpTransparent(memDC, memDC2, _player_head, px, py, imgW, imgH);
 			} else {
 				HBRUSH hBrush = CreateSolidBrush(id == my_id ? RGB(255, 0, 0) : RGB(0, 0, 255));
 				HBRUSH oldB = (HBRUSH)SelectObject(memDC, hBrush);
@@ -345,12 +348,14 @@ static auto last_time = std::chrono::steady_clock::now();
 					int px = (int)(rel_x * cellWidth) + (cellWidth / 2);
 					int py = (int)(screen_y * cellHeight);
 					
-					Gdiplus::Image* helmet_img = _helmets[player.armor_tier];
+					HBITMAP helmet_img = _helmets[player.armor_tier];
 					if (helmet_img) {
-						int img_w = helmet_img->GetWidth() * 2; // scale if needed
-						int img_h = helmet_img->GetHeight() * 2;
+						BITMAP bmp;
+						GetObject(helmet_img, sizeof(BITMAP), &bmp);
+						int img_w = bmp.bmWidth * 2; // scale if needed
+						int img_h = bmp.bmHeight * 2;
 						// Draw helmet above the head
-						graphics.DrawImage(helmet_img, px - img_w / 2, py - 40, img_w, img_h);
+						DrawBmpTransparent(memDC, memDC2, helmet_img, px - img_w / 2, py - 40, img_w, img_h);
 					}
 				}
 			}
@@ -605,7 +610,7 @@ static auto last_time = std::chrono::steady_clock::now();
 			if (i == 0) {
 				int potion_count = gm->my_inventory()[static_cast<int>(ItemType::HEALTH_POTION)];
 				if (_health_potion_img) {
-					graphics.DrawImage(_health_potion_img, slotX + 3, slotY + 3, 24, 24);
+					DrawBmpTransparent(memDC, memDC2, _health_potion_img, slotX + 3, slotY + 3, 24, 24);
 					Gdiplus::Font smallFont(&fontFamily, 10, Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
 					graphics.DrawString(std::to_wstring(potion_count).c_str(), -1, &smallFont, Gdiplus::PointF(static_cast<float>(slotX + 16), static_cast<float>(slotY + 16)), &whiteBrush);
 				}
@@ -622,7 +627,7 @@ static auto last_time = std::chrono::steady_clock::now();
 			// Slot 2: Buff Skill (mapped to Blaze Powder Image)
 			else if (i == 1) {
 				if (_blaze_powder_img) {
-					graphics.DrawImage(_blaze_powder_img, slotX + 3, slotY + 3, 24, 24);
+					DrawBmpTransparent(memDC, memDC2, _blaze_powder_img, slotX + 3, slotY + 3, 24, 24);
 				}
 
 				int skillElapsed = (int)std::chrono::duration_cast<std::chrono::milliseconds>(now - gm->last_skill_use()).count();
@@ -649,7 +654,7 @@ static auto last_time = std::chrono::steady_clock::now();
 			
 			// --- Draw Gold (Top-Left) ---
 			if (_gold_icon) {
-				graphics.DrawImage(_gold_icon, invX + 20, invY + 10, 24, 24);
+				DrawBmpTransparent(memDC, memDC2, _gold_icon, invX + 20, invY + 10, 24, 24);
 			}
 			std::wstring goldStr = std::to_wstring(gm->my_gold());
 			graphics.DrawString(goldStr.c_str(), -1, &font, Gdiplus::PointF(static_cast<float>(invX + 50), static_cast<float>(invY + 14)), &whiteBrush);
@@ -667,8 +672,8 @@ static auto last_time = std::chrono::steady_clock::now();
 			if (gm->players().contains(gm->my_id())) {
 				auto& my_player = gm->players()[gm->my_id()];
 				if (my_player.armor_tier > 0 && my_player.armor_tier <= 4) {
-					Gdiplus::Image* helmet_img = _helmets[my_player.armor_tier];
-					if (helmet_img) graphics.DrawImage(helmet_img, eqSlotX_helm + 3, eqSlotY + 3, 24, 24);
+					HBITMAP helmet_img = _helmets[my_player.armor_tier];
+					if (helmet_img) DrawBmpTransparent(memDC, memDC2, helmet_img, eqSlotX_helm + 3, eqSlotY + 3, 24, 24);
 				}
 				if (my_player.weapon_tier > 0 && my_player.weapon_tier <= 6) {
 					Gdiplus::Image* sword_img = _swords[my_player.weapon_tier];
@@ -699,9 +704,9 @@ static auto last_time = std::chrono::steady_clock::now();
 				
 				graphics.DrawRectangle(&whitePen, slotX, slotY, 30, 30);
 				
-				Gdiplus::Image* img = _item_images[item_id];
+				HBITMAP img = _item_images[item_id];
 				if (img) {
-					graphics.DrawImage(img, slotX + 3, slotY + 3, 24, 24);
+					DrawBmpTransparent(memDC, memDC2, img, slotX + 3, slotY + 3, 24, 24);
 				}
 
 				// Draw count at bottom-right
@@ -721,6 +726,44 @@ static auto last_time = std::chrono::steady_clock::now();
 				graphics.DrawRectangle(&whitePen, slotX, slotY, 30, 30);
 			}
 		}
+		// Trade UI
+		if (gm->is_trading()) {
+			int tradeX = width / 2 - 200;
+			int tradeY = height / 2 - 150;
+			int tradeW = 400;
+			int tradeH = 300;
+
+			Gdiplus::SolidBrush darkBlueBrush(Gdiplus::Color(220, 20, 20, 60));
+			graphics.FillRectangle(&darkBlueBrush, tradeX, tradeY, tradeW, tradeH);
+			graphics.DrawRectangle(&whitePen, tradeX, tradeY, tradeW, tradeH);
+			
+			std::wstring title = L"[ 거래 ]";
+			int v_id = gm->trade_visual_id();
+			if (v_id == 6) title = L"[ 성직자 ]";
+			else if (v_id == 7) title = L"[ 대장장이 ]";
+			else if (v_id == 8) title = L"[ 무기장인 ]";
+			else if (v_id == 9) title = L"[ 사서 (인챈터) ]";
+
+			graphics.DrawString(title.c_str(), -1, &font, Gdiplus::PointF(static_cast<float>(tradeX + 150), static_cast<float>(tradeY + 10)), &whiteBrush);
+
+			if (v_id >= 6 && v_id <= 9 && _mob_heads[v_id]) {
+				DrawBmpTransparent(memDC, memDC2, _mob_heads[v_id], tradeX + 20, tradeY + 20, 48, 48);
+			}
+
+			std::wstring options = L"";
+			if (v_id == 6) {
+				options = L"[1] 썩은고기 10개->50G\n[2] 뼈다귀 5개->100G\n[3] 화약 3개->150G\n[4] 철괴 1개->200G\n[5] 다이아몬드 1개->500G\n[6] 체력 포션 구매(30G)";
+			} else if (v_id == 7) {
+				options = L"[1] 갑옷 다음 티어 업그레이드\n(비용: 다음 티어 * 150G)";
+			} else if (v_id == 8) {
+				options = L"[1] 무기 다음 티어 강화\n(조건: 다음 티어 * 5 레벨\n 비용: 다음 티어 * 200G)";
+			} else if (v_id == 9) {
+				options = L"[1] 무기 마법 부여 (인챈트)\n(비용: 500G, 확률: 30%)";
+			}
+
+			graphics.DrawString(options.c_str(), -1, &font, Gdiplus::PointF(static_cast<float>(tradeX + 30), static_cast<float>(tradeY + 80)), &whiteBrush);
+			graphics.DrawString(L"숫자 키(1~6)를 눌러 선택하세요.\nESC를 눌러 거래를 종료합니다.", -1, &font, Gdiplus::PointF(static_cast<float>(tradeX + 30), static_cast<float>(tradeY + 240)), &whiteBrush);
+		}
 
 		// Buff Gauge
 		if (now < gm->buff_end_time()) {
@@ -738,5 +781,6 @@ static auto last_time = std::chrono::steady_clock::now();
 	SelectObject(memDC, oldBitmap);
 	DeleteObject(memBitmap);
 	DeleteDC(memDC);
+	DeleteDC(memDC2);
 	ReleaseDC(hWnd, hdc);
 }

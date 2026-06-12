@@ -74,8 +74,33 @@ LRESULT CALLBACK window_proc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lPar
 
 		if (gm->is_chatting()) return 0; // Ignore other keys when chatting
 
+		if (gm->is_trading()) {
+			if (wParam == VK_ESCAPE) {
+				gm->set_trading(false);
+				return 0;
+			}
+			if (wParam >= '1' && wParam <= '9') {
+				C2S_TradeCommand p;
+				p.size = sizeof(p);
+				p.type = C2S_TRADE_COMMAND;
+				p.trade_index = static_cast<char>(wParam - '0');
+				p.npc_id = gm->trade_npc_id();
+				NetworkManager::Instance()->send_packet(&p);
+				// We don't automatically close trading. The user can trade multiple times until they press ESC.
+				return 0;
+			}
+			return 0; // Ignore other keys while trading
+		}
+
 		if (wParam == 'E') {
 			gm->toggle_inventory();
+			return 0;
+		}
+		if (wParam == 'F') {
+			C2S_InteractNpc p;
+			p.size = sizeof(p);
+			p.type = C2S_INTERACT_NPC;
+			NetworkManager::Instance()->send_packet(&p);
 			return 0;
 		}
 		if (wParam == '1' || wParam == '2') {

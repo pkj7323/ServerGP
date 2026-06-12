@@ -71,6 +71,56 @@ NPC_TYPES = {
         drop_item  = 4, -- Iron Ingot
         drop_gold  = 20,
     },
+    [6] = {
+        name       = "Priest",
+        hp         = 9999,
+        level      = 99,
+        exp        = 0,
+        attack     = 0,
+        visual_id  = 6,
+        drop_item  = 0,
+        drop_gold  = 0,
+    },
+    [7] = {
+        name       = "Armorer",
+        hp         = 9999,
+        level      = 99,
+        exp        = 0,
+        attack     = 0,
+        visual_id  = 7,
+        drop_item  = 0,
+        drop_gold  = 0,
+    },
+    [8] = {
+        name       = "Weaponsmith",
+        hp         = 9999,
+        level      = 99,
+        exp        = 0,
+        attack     = 0,
+        visual_id  = 8,
+        drop_item  = 0,
+        drop_gold  = 0,
+    },
+    [9] = {
+        name       = "Librarian",
+        hp         = 9999,
+        level      = 99,
+        exp        = 0,
+        attack     = 0,
+        visual_id  = 9,
+        drop_item  = 0,
+        drop_gold  = 0,
+    },
+}
+
+-- =============================================================================
+-- 마을 상인 고정 스폰 좌표 (마을 중심 주변)
+-- =============================================================================
+MERCHANT_SPAWNS = {
+    { type_id = 6, x = 1005, y = 1005 },
+    { type_id = 7, x = 995, y = 1005 },
+    { type_id = 8, x = 1005, y = 995 },
+    { type_id = 9, x = 995, y = 995 },
 }
 
 -- =============================================================================

@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include "Singleton.h"
 
@@ -10,10 +10,10 @@ class RenderManager : public Singleton<RenderManager>
 public:
 	RenderManager() : _hBoardBmp(NULL) {
 		_helmets[0] = nullptr;
-		_helmets[1] = new Gdiplus::Image(L"Resource/copper_helmet.png");
-		_helmets[2] = new Gdiplus::Image(L"Resource/iron_helmet.png");
-		_helmets[3] = new Gdiplus::Image(L"Resource/diamond_helmet.png");
-		_helmets[4] = new Gdiplus::Image(L"Resource/netherite_helmet.png");
+		_helmets[1] = (HBITMAP)LoadImage(NULL, L"Resource/copper_helmet.bmp", IMAGE_BITMAP, 0, 0, LR_LOADFROMFILE);
+		_helmets[2] = (HBITMAP)LoadImage(NULL, L"Resource/iron_helmet.bmp", IMAGE_BITMAP, 0, 0, LR_LOADFROMFILE);
+		_helmets[3] = (HBITMAP)LoadImage(NULL, L"Resource/diamond_helmet.bmp", IMAGE_BITMAP, 0, 0, LR_LOADFROMFILE);
+		_helmets[4] = (HBITMAP)LoadImage(NULL, L"Resource/netherite_helmet.bmp", IMAGE_BITMAP, 0, 0, LR_LOADFROMFILE);
 
 		_swords[0] = nullptr;
 		_swords[1] = new Gdiplus::Image(L"Resource/wooden_sword.png");
@@ -23,30 +23,34 @@ public:
 		_swords[5] = new Gdiplus::Image(L"Resource/diamond_sword.png");
 		_swords[6] = new Gdiplus::Image(L"Resource/netherite_sword.png");
 		
-		_player_head = new Gdiplus::Image(L"Resource/steve_head.png");
+		_player_head = (HBITMAP)LoadImage(NULL, L"Resource/steve_head.bmp", IMAGE_BITMAP, 0, 0, LR_LOADFROMFILE);
 		_mob_heads[0] = nullptr;
-		_mob_heads[1] = new Gdiplus::Image(L"Resource/zombie_head.png");
-		_mob_heads[2] = new Gdiplus::Image(L"Resource/skeleton_head.png");
-		_mob_heads[3] = new Gdiplus::Image(L"Resource/creeper_head.png");
-		_mob_heads[4] = new Gdiplus::Image(L"Resource/enderman_head.png");
-		_mob_heads[5] = new Gdiplus::Image(L"Resource/iron_golem_head.png");
+		_mob_heads[1] = (HBITMAP)LoadImage(NULL, L"Resource/zombie_head.bmp", IMAGE_BITMAP, 0, 0, LR_LOADFROMFILE);
+		_mob_heads[2] = (HBITMAP)LoadImage(NULL, L"Resource/skeleton_head.bmp", IMAGE_BITMAP, 0, 0, LR_LOADFROMFILE);
+		_mob_heads[3] = (HBITMAP)LoadImage(NULL, L"Resource/creeper_head.bmp", IMAGE_BITMAP, 0, 0, LR_LOADFROMFILE);
+		_mob_heads[4] = (HBITMAP)LoadImage(NULL, L"Resource/enderman_head.bmp", IMAGE_BITMAP, 0, 0, LR_LOADFROMFILE);
+		_mob_heads[5] = (HBITMAP)LoadImage(NULL, L"Resource/iron_golem_head.bmp", IMAGE_BITMAP, 0, 0, LR_LOADFROMFILE);
+		_mob_heads[6] = (HBITMAP)LoadImage(NULL, L"Resource/cleric_head.bmp", IMAGE_BITMAP, 0, 0, LR_LOADFROMFILE);
+		_mob_heads[7] = (HBITMAP)LoadImage(NULL, L"Resource/armorer_head.bmp", IMAGE_BITMAP, 0, 0, LR_LOADFROMFILE);
+		_mob_heads[8] = (HBITMAP)LoadImage(NULL, L"Resource/weaponsmith_head.bmp", IMAGE_BITMAP, 0, 0, LR_LOADFROMFILE);
+		_mob_heads[9] = (HBITMAP)LoadImage(NULL, L"Resource/librarian_head.bmp", IMAGE_BITMAP, 0, 0, LR_LOADFROMFILE);
 
-		_gold_icon = new Gdiplus::Image(L"Resource/gold_nugget.png");
+		_gold_icon = (HBITMAP)LoadImage(NULL, L"Resource/gold_nugget.bmp", IMAGE_BITMAP, 0, 0, LR_LOADFROMFILE);
 		for (int i = 0; i < 20; ++i) _item_images[i] = nullptr;
-		_item_images[1] = new Gdiplus::Image(L"Resource/rotten_flesh.png");
-		_item_images[2] = new Gdiplus::Image(L"Resource/bone.png");
-		_item_images[3] = new Gdiplus::Image(L"Resource/gunpowder.png");
-		_item_images[4] = new Gdiplus::Image(L"Resource/iron_ingot.png");
-		_item_images[5] = new Gdiplus::Image(L"Resource/gold_ingot.png");
-		_item_images[6] = new Gdiplus::Image(L"Resource/diamond.png");
+		_item_images[1] = (HBITMAP)LoadImage(NULL, L"Resource/rotten_flesh.bmp", IMAGE_BITMAP, 0, 0, LR_LOADFROMFILE);
+		_item_images[2] = (HBITMAP)LoadImage(NULL, L"Resource/bone.bmp", IMAGE_BITMAP, 0, 0, LR_LOADFROMFILE);
+		_item_images[3] = (HBITMAP)LoadImage(NULL, L"Resource/gunpowder.bmp", IMAGE_BITMAP, 0, 0, LR_LOADFROMFILE);
+		_item_images[4] = (HBITMAP)LoadImage(NULL, L"Resource/iron_ingot.bmp", IMAGE_BITMAP, 0, 0, LR_LOADFROMFILE);
+		_item_images[5] = (HBITMAP)LoadImage(NULL, L"Resource/gold_ingot.bmp", IMAGE_BITMAP, 0, 0, LR_LOADFROMFILE);
+		_item_images[6] = (HBITMAP)LoadImage(NULL, L"Resource/diamond.bmp", IMAGE_BITMAP, 0, 0, LR_LOADFROMFILE);
 		
-		_grass_img = new Gdiplus::Image(L"Resource/grass.png");
-		_oak_sapling_img = new Gdiplus::Image(L"Resource/oak_sapling.png");
-		_spruce_sapling_img = new Gdiplus::Image(L"Resource/spruce_sapling.png");
-		_cactus_img = new Gdiplus::Image(L"Resource/cactus.png");
+		_grass_img = (HBITMAP)LoadImage(NULL, L"Resource/grass.bmp", IMAGE_BITMAP, 0, 0, LR_LOADFROMFILE);
+		_oak_sapling_img = (HBITMAP)LoadImage(NULL, L"Resource/oak_sapling.bmp", IMAGE_BITMAP, 0, 0, LR_LOADFROMFILE);
+		_spruce_sapling_img = (HBITMAP)LoadImage(NULL, L"Resource/spruce_sapling.bmp", IMAGE_BITMAP, 0, 0, LR_LOADFROMFILE);
+		_cactus_img = (HBITMAP)LoadImage(NULL, L"Resource/cactus.bmp", IMAGE_BITMAP, 0, 0, LR_LOADFROMFILE);
 		
-		_health_potion_img = new Gdiplus::Image(L"Resource/health_potion.png");
-		_blaze_powder_img = new Gdiplus::Image(L"Resource/blaze_powder.png");
+		_health_potion_img = (HBITMAP)LoadImage(NULL, L"Resource/health_potion.bmp", IMAGE_BITMAP, 0, 0, LR_LOADFROMFILE);
+		_blaze_powder_img = (HBITMAP)LoadImage(NULL, L"Resource/blaze_powder.bmp", IMAGE_BITMAP, 0, 0, LR_LOADFROMFILE);
 		_arrow_img = new Gdiplus::Image(L"Resource/arrow.png");
 	}
 	~RenderManager();
@@ -56,22 +60,31 @@ public:
 	void set_board_bitmap(HBITMAP hBmp) { _hBoardBmp = hBmp; }
 	HBITMAP board_bitmap() const { return _hBoardBmp; }
 
+	void DrawBmpTransparent(HDC destDC, HDC srcDC, HBITMAP hBmp, int x, int y, int w, int h) {
+		if (!hBmp) return;
+		HBITMAP oldBmp = (HBITMAP)SelectObject(srcDC, hBmp);
+		BITMAP bmp;
+		GetObject(hBmp, sizeof(BITMAP), &bmp);
+		TransparentBlt(destDC, x, y, w, h, srcDC, 0, 0, bmp.bmWidth, bmp.bmHeight, RGB(255, 0, 255));
+		SelectObject(srcDC, oldBmp);
+	}
+
 private:
 	HBITMAP _hBoardBmp;
-	Gdiplus::Image* _helmets[5];
+	HBITMAP _helmets[5];
 	Gdiplus::Image* _swords[7];
-	Gdiplus::Image* _player_head;
-	Gdiplus::Image* _mob_heads[6];
+	HBITMAP _player_head;
+	HBITMAP _mob_heads[10];
 
-	Gdiplus::Image* _gold_icon;
-	Gdiplus::Image* _item_images[20];
-	Gdiplus::Image* _grass_img;
+	HBITMAP _gold_icon;
+	HBITMAP _item_images[20];
+	HBITMAP _grass_img;
 
-	Gdiplus::Image* _oak_sapling_img;
-	Gdiplus::Image* _spruce_sapling_img;
-	Gdiplus::Image* _cactus_img;
+	HBITMAP _oak_sapling_img;
+	HBITMAP _spruce_sapling_img;
+	HBITMAP _cactus_img;
 
-	Gdiplus::Image* _health_potion_img;
-	Gdiplus::Image* _blaze_powder_img;
+	HBITMAP _health_potion_img;
+	HBITMAP _blaze_powder_img;
 	Gdiplus::Image* _arrow_img;
 };
