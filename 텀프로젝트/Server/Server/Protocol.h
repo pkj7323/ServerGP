@@ -149,7 +149,10 @@ struct S2C_AvatarInfo {
 	int max_hp;
 	unsigned long long exp;
 	unsigned char level;
-	char armor_tier; // 0: None, 1: Copper, 2: Iron, 3: Diamond, 4: Netherite
+	char head_tier;
+	char chest_tier;
+	char legs_tier;
+	char boots_tier;
 	char weapon_tier; // 0: None, 1: Wood, 2: Gold, 3: Copper, 4: Iron, 5: Diamond, 6: Netherite
 	short dir_x;
 	short dir_y;
@@ -167,7 +170,10 @@ struct S2C_AddObject {
 	int max_hp;
 	unsigned long long exp;
 	unsigned char level;
-	char armor_tier; // 0: None, 1: Copper, 2: Iron, 3: Diamond, 4: Netherite
+	char head_tier;
+	char chest_tier;
+	char legs_tier;
+	char boots_tier;
 	char weapon_tier;
 	short dir_x;
 	short dir_y;
@@ -206,7 +212,10 @@ struct S2C_StatusChange {
 	int max_hp;
 	unsigned long long exp;
 	unsigned char level;
-	char armor_tier; // 0: None, 1: Copper, 2: Iron, 3: Diamond, 4: Netherite
+	char head_tier;
+	char chest_tier;
+	char legs_tier;
+	char boots_tier;
 	char weapon_tier;
 };
 

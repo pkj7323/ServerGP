@@ -122,20 +122,20 @@ void NetworkManager::process_packet(char* ptr)
 	case S2C_AVATAR_INFO: {
 		S2C_AvatarInfo* p = reinterpret_cast<S2C_AvatarInfo*>(ptr);
 		gm->set_my_id(p->playerId);
-		gm->players()[p->playerId] = { p->playerId, gm->username(), p->x, p->y, (float)p->x, (float)p->y, p->armor_tier, p->weapon_tier, p->dir_x, p->dir_y, 0, p->hp, p->max_hp, p->exp, p->level };
-		std::cout << "Avatar Info: ID=" << p->playerId << " at (" << p->x << ", " << p->y << "), ArmorTier=" << (int)p->armor_tier << "\n";
+		gm->players()[p->playerId] = { p->playerId, gm->username(), p->x, p->y, (float)p->x, (float)p->y, p->head_tier, p->chest_tier, p->legs_tier, p->boots_tier, p->weapon_tier, p->dir_x, p->dir_y, 0, p->hp, p->max_hp, p->exp, p->level };
+		std::cout << "Avatar Info: ID=" << p->playerId << " at (" << p->x << ", " << p->y << "), HeadTier=" << (int)p->head_tier << "\n";
 		break;
 	}
 	case S2C_ADD_OBJECT: {
 		S2C_AddObject* p = reinterpret_cast<S2C_AddObject*>(ptr);
 		if (is_npc_id(p->object_id))
 		{
-			gm->npcs().emplace(p->object_id, Object{ p->object_id, p->obj_name, p->x, p->y, (float)p->x, (float)p->y, p->armor_tier, p->weapon_tier, p->dir_x, p->dir_y, p->visual_id, p->hp, p->max_hp, p->exp, p->level, L"", std::chrono::steady_clock::now(), p->npc_state });
+			gm->npcs().emplace(p->object_id, Object{ p->object_id, p->obj_name, p->x, p->y, (float)p->x, (float)p->y, p->head_tier, p->chest_tier, p->legs_tier, p->boots_tier, p->weapon_tier, p->dir_x, p->dir_y, p->visual_id, p->hp, p->max_hp, p->exp, p->level, L"", std::chrono::steady_clock::now(), p->npc_state });
 		}
 		else if (p->object_id == gm->my_id()) break;
 		else {
-			gm->players().emplace(p->object_id, Object{ p->object_id, p->obj_name, p->x, p->y, (float)p->x, (float)p->y, p->armor_tier, p->weapon_tier, p->dir_x, p->dir_y, p->visual_id, p->hp, p->max_hp, p->exp, p->level });
-			std::cout << "Add Player: ID=" << p->object_id << ", Name=" << p->obj_name << " at (" << p->x << ", " << p->y << "), ArmorTier=" << (int)p->armor_tier << "\n";
+			gm->players().emplace(p->object_id, Object{ p->object_id, p->obj_name, p->x, p->y, (float)p->x, (float)p->y, p->head_tier, p->chest_tier, p->legs_tier, p->boots_tier, p->weapon_tier, p->dir_x, p->dir_y, p->visual_id, p->hp, p->max_hp, p->exp, p->level });
+			std::cout << "Add Player: ID=" << p->object_id << ", Name=" << p->obj_name << " at (" << p->x << ", " << p->y << "), HeadTier=" << (int)p->head_tier << "\n";
 		}
 		break;
 	}
@@ -231,7 +231,10 @@ void NetworkManager::process_packet(char* ptr)
 	case S2C_STATUS_CHANGE: {
 		S2C_StatusChange* p = reinterpret_cast<S2C_StatusChange*>(ptr);
 		if (gm->players().contains(p->object_id)) {
-			gm->players()[p->object_id].armor_tier = p->armor_tier;
+			gm->players()[p->object_id].head_tier = p->head_tier;
+			gm->players()[p->object_id].chest_tier = p->chest_tier;
+			gm->players()[p->object_id].legs_tier = p->legs_tier;
+			gm->players()[p->object_id].boots_tier = p->boots_tier;
 			gm->players()[p->object_id].weapon_tier = p->weapon_tier;
 			gm->players()[p->object_id].hp = p->hp;
 			gm->players()[p->object_id].max_hp = p->max_hp;
@@ -239,7 +242,10 @@ void NetworkManager::process_packet(char* ptr)
 			gm->players()[p->object_id].level = p->level;
 		}
 		else if (gm->npcs().contains(p->object_id)) {
-			gm->npcs()[p->object_id].armor_tier = p->armor_tier;
+			gm->npcs()[p->object_id].head_tier = p->head_tier;
+			gm->npcs()[p->object_id].chest_tier = p->chest_tier;
+			gm->npcs()[p->object_id].legs_tier = p->legs_tier;
+			gm->npcs()[p->object_id].boots_tier = p->boots_tier;
 			gm->npcs()[p->object_id].weapon_tier = p->weapon_tier;
 			gm->npcs()[p->object_id].hp = p->hp;
 			gm->npcs()[p->object_id].max_hp = p->max_hp;

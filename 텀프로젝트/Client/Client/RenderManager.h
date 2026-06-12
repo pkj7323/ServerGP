@@ -15,6 +15,24 @@ public:
 		_helmets[3] = (HBITMAP)LoadImage(NULL, L"Resource/diamond_helmet.bmp", IMAGE_BITMAP, 0, 0, LR_LOADFROMFILE);
 		_helmets[4] = (HBITMAP)LoadImage(NULL, L"Resource/netherite_helmet.bmp", IMAGE_BITMAP, 0, 0, LR_LOADFROMFILE);
 
+		_chestplates[0] = nullptr;
+		_chestplates[1] = (HBITMAP)LoadImage(NULL, L"Resource/copper_chestplate.bmp", IMAGE_BITMAP, 0, 0, LR_LOADFROMFILE);
+		_chestplates[2] = (HBITMAP)LoadImage(NULL, L"Resource/iron_chestplate.bmp", IMAGE_BITMAP, 0, 0, LR_LOADFROMFILE);
+		_chestplates[3] = (HBITMAP)LoadImage(NULL, L"Resource/diamond_chestplate.bmp", IMAGE_BITMAP, 0, 0, LR_LOADFROMFILE);
+		_chestplates[4] = (HBITMAP)LoadImage(NULL, L"Resource/netherite_chestplate.bmp", IMAGE_BITMAP, 0, 0, LR_LOADFROMFILE);
+
+		_leggings[0] = nullptr;
+		_leggings[1] = (HBITMAP)LoadImage(NULL, L"Resource/copper_leggings.bmp", IMAGE_BITMAP, 0, 0, LR_LOADFROMFILE);
+		_leggings[2] = (HBITMAP)LoadImage(NULL, L"Resource/iron_leggings.bmp", IMAGE_BITMAP, 0, 0, LR_LOADFROMFILE);
+		_leggings[3] = (HBITMAP)LoadImage(NULL, L"Resource/diamond_leggings.bmp", IMAGE_BITMAP, 0, 0, LR_LOADFROMFILE);
+		_leggings[4] = (HBITMAP)LoadImage(NULL, L"Resource/netherite_leggings.bmp", IMAGE_BITMAP, 0, 0, LR_LOADFROMFILE);
+
+		_boots[0] = nullptr;
+		_boots[1] = (HBITMAP)LoadImage(NULL, L"Resource/copper_boots.bmp", IMAGE_BITMAP, 0, 0, LR_LOADFROMFILE);
+		_boots[2] = (HBITMAP)LoadImage(NULL, L"Resource/iron_boots.bmp", IMAGE_BITMAP, 0, 0, LR_LOADFROMFILE);
+		_boots[3] = (HBITMAP)LoadImage(NULL, L"Resource/diamond_boots.bmp", IMAGE_BITMAP, 0, 0, LR_LOADFROMFILE);
+		_boots[4] = (HBITMAP)LoadImage(NULL, L"Resource/netherite_boots.bmp", IMAGE_BITMAP, 0, 0, LR_LOADFROMFILE);
+
 		_swords[0] = nullptr;
 		_swords[1] = new Gdiplus::Image(L"Resource/wooden_sword.png");
 		_swords[2] = new Gdiplus::Image(L"Resource/golden_sword.png");
@@ -72,6 +90,9 @@ public:
 private:
 	HBITMAP _hBoardBmp;
 	HBITMAP _helmets[5];
+	HBITMAP _chestplates[5];
+	HBITMAP _leggings[5];
+	HBITMAP _boots[5];
 	Gdiplus::Image* _swords[7];
 	HBITMAP _player_head;
 	HBITMAP _mob_heads[10];

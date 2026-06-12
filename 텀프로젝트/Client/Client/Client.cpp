@@ -47,6 +47,15 @@ LRESULT CALLBACK window_proc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lPar
 	case WM_KEYDOWN: {
 		if (!gm->players().contains(gm->my_id())) break;
 
+		if (gm->players()[gm->my_id()].hp <= 0) {
+			if (wParam == VK_ESCAPE) {
+				gm->set_running(false);
+				return 0;
+			}
+			return 0; // Ignore other input when dead
+		}
+
+
 		// Chat Toggle & Sending
 		if (wParam == VK_RETURN) {
 			if (gm->is_chatting()) {
@@ -61,7 +70,7 @@ LRESULT CALLBACK window_proc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lPar
 					C2S_Chat p;
 					p.size = sizeof(p);
 					p.type = C2S_CHAT;
-					strncpy_s(p.message, msg.c_str(), MAX_CHAT_MSG_LEN - 1);
+					strncpy_s(p.message, sizeof(p.message), msg.c_str(), _TRUNCATE);
 					NetworkManager::Instance()->send_packet(&p);
 					gm->current_chat_input().clear();
 				}

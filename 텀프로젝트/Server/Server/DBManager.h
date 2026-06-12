@@ -18,7 +18,10 @@ struct player_data {
 	bool success;
 	char user_id[MAX_NAME_LEN];
 	char user_name[MAX_NAME_LEN];
-	int armor_tier;
+	int head_tier;
+	int chest_tier;
+	int legs_tier;
+	int boots_tier;
 	int weapon_tier;
 	int hp;
 	int max_hp;

@@ -39,10 +39,10 @@ RenderManager::~RenderManager()
 		_hBoardBmp = NULL;
 	}
 	for (int i = 1; i <= 4; ++i) {
-		if (_helmets[i]) {
-			DeleteObject(_helmets[i]);
-			_helmets[i] = nullptr;
-		}
+		if (_helmets[i]) { DeleteObject(_helmets[i]); _helmets[i] = nullptr; }
+		if (_chestplates[i]) { DeleteObject(_chestplates[i]); _chestplates[i] = nullptr; }
+		if (_leggings[i]) { DeleteObject(_leggings[i]); _leggings[i] = nullptr; }
+		if (_boots[i]) { DeleteObject(_boots[i]); _boots[i] = nullptr; }
 	}
 	for (int i = 1; i <= 6; ++i) {
 		if (_swords[i]) {
@@ -340,7 +340,8 @@ static auto last_time = std::chrono::steady_clock::now();
 
 		// 4.6 Draw Helmets for Players
 		for (auto& [id, player] : players) {
-			if (player.armor_tier > 0 && player.armor_tier <= 4) {
+			int average_tier = (player.head_tier + player.chest_tier + player.legs_tier + player.boots_tier) / 4;
+			if (average_tier > 0 && average_tier <= 4) {
 				float rel_x = player.render_x - left_x;
 				float rel_y = player.render_y - bottom_y;
 				if (rel_x >= 0 && rel_x < VIEW_WIDTH && rel_y >= 0 && rel_y < VIEW_HEIGHT) {
@@ -348,7 +349,7 @@ static auto last_time = std::chrono::steady_clock::now();
 					int px = (int)(rel_x * cellWidth) + (cellWidth / 2);
 					int py = (int)(screen_y * cellHeight);
 					
-					HBITMAP helmet_img = _helmets[player.armor_tier];
+					HBITMAP helmet_img = _helmets[average_tier];
 					if (helmet_img) {
 						BITMAP bmp;
 						GetObject(helmet_img, sizeof(BITMAP), &bmp);
@@ -663,17 +664,35 @@ static auto last_time = std::chrono::steady_clock::now();
 			graphics.DrawString(L"Eq:", -1, &font, Gdiplus::PointF(static_cast<float>(invX + 20), static_cast<float>(invY + 45)), &whiteBrush);
 
 			// Equipment Slot Rendering
-			int eqSlotX_helm = invX + 50;
+			int eqSlotX_helm = invX + 10;
+			int eqSlotX_chest = invX + 50;
+			int eqSlotX_legs = invX + 90;
+			int eqSlotX_boots = invX + 130;
+			int eqSlotX_sword = invX + 170;
 			int eqSlotY = invY + 40;
-			int eqSlotX_sword = invX + 90;
 			graphics.DrawRectangle(&whitePen, eqSlotX_helm, eqSlotY, 30, 30);
+			graphics.DrawRectangle(&whitePen, eqSlotX_chest, eqSlotY, 30, 30);
+			graphics.DrawRectangle(&whitePen, eqSlotX_legs, eqSlotY, 30, 30);
+			graphics.DrawRectangle(&whitePen, eqSlotX_boots, eqSlotY, 30, 30);
 			graphics.DrawRectangle(&whitePen, eqSlotX_sword, eqSlotY, 30, 30);
 
 			if (gm->players().contains(gm->my_id())) {
 				auto& my_player = gm->players()[gm->my_id()];
-				if (my_player.armor_tier > 0 && my_player.armor_tier <= 4) {
-					HBITMAP helmet_img = _helmets[my_player.armor_tier];
+				if (my_player.head_tier > 0 && my_player.head_tier <= 4) {
+					HBITMAP helmet_img = _helmets[my_player.head_tier];
 					if (helmet_img) DrawBmpTransparent(memDC, memDC2, helmet_img, eqSlotX_helm + 3, eqSlotY + 3, 24, 24);
+				}
+				if (my_player.chest_tier > 0 && my_player.chest_tier <= 4) {
+					HBITMAP img = _chestplates[my_player.chest_tier];
+					if (img) DrawBmpTransparent(memDC, memDC2, img, eqSlotX_chest + 3, eqSlotY + 3, 24, 24);
+				}
+				if (my_player.legs_tier > 0 && my_player.legs_tier <= 4) {
+					HBITMAP img = _leggings[my_player.legs_tier];
+					if (img) DrawBmpTransparent(memDC, memDC2, img, eqSlotX_legs + 3, eqSlotY + 3, 24, 24);
+				}
+				if (my_player.boots_tier > 0 && my_player.boots_tier <= 4) {
+					HBITMAP img = _boots[my_player.boots_tier];
+					if (img) DrawBmpTransparent(memDC, memDC2, img, eqSlotX_boots + 3, eqSlotY + 3, 24, 24);
 				}
 				if (my_player.weapon_tier > 0 && my_player.weapon_tier <= 6) {
 					Gdiplus::Image* sword_img = _swords[my_player.weapon_tier];
@@ -686,7 +705,8 @@ static auto last_time = std::chrono::steady_clock::now();
 				Gdiplus::SolidBrush yellowBrush(Gdiplus::Color(255, 255, 255, 0)); // Yellow for exp
 				
 				std::wstring lvStr = L"Lv." + std::to_wstring(my_player.level);
-				std::wstring expStr = L"Exp: " + std::to_wstring(my_player.exp);
+				unsigned long long required_exp = static_cast<unsigned long long>(my_player.level) * my_player.level * 100;
+				std::wstring expStr = L"Exp: " + std::to_wstring(my_player.exp) + L" / " + std::to_wstring(required_exp);
 				
 				graphics.DrawString(lvStr.c_str(), -1, &boldFont, Gdiplus::PointF(static_cast<float>(invX + 150), static_cast<float>(invY + 45)), &cyanBrush);
 				graphics.DrawString(expStr.c_str(), -1, &boldFont, Gdiplus::PointF(static_cast<float>(invX + 210), static_cast<float>(invY + 45)), &yellowBrush);
@@ -754,7 +774,7 @@ static auto last_time = std::chrono::steady_clock::now();
 			if (v_id == 6) {
 				options = L"[1] 썩은고기 10개->50G\n[2] 뼈다귀 5개->100G\n[3] 화약 3개->150G\n[4] 철괴 1개->200G\n[5] 다이아몬드 1개->500G\n[6] 체력 포션 구매(30G)";
 			} else if (v_id == 7) {
-				options = L"[1] 갑옷 다음 티어 업그레이드\n(비용: 다음 티어 * 150G)";
+				options = L"[1] 투구 업그레이드\n[2] 흉갑 업그레이드\n[3] 바지 업그레이드\n[4] 부츠 업그레이드\n(비용: 다음 티어 * 150G)";
 			} else if (v_id == 8) {
 				options = L"[1] 무기 다음 티어 강화\n(조건: 다음 티어 * 5 레벨\n 비용: 다음 티어 * 200G)";
 			} else if (v_id == 9) {
@@ -773,6 +793,42 @@ static auto last_time = std::chrono::steady_clock::now();
 			swprintf(buffText, 64, L"스킬 유지: %.1f초", buffSec);
 			Gdiplus::SolidBrush orangeBrush(Gdiplus::Color(255, 200, 100, 0));
 			graphics.DrawString(buffText, -1, &font, Gdiplus::PointF(static_cast<float>(width / 2 - 50), 50.0f), &orangeBrush);
+		}
+	}
+
+	if (gm->players().contains(gm->my_id())) {
+		auto& my_player = gm->players()[gm->my_id()];
+		static bool is_dead = false;
+		static std::chrono::time_point<std::chrono::steady_clock> death_time;
+		
+		if (my_player.hp <= 0) {
+			if (!is_dead) {
+				is_dead = true;
+				death_time = now;
+			}
+			auto current_now = std::chrono::steady_clock::now();
+			int elapsed = static_cast<int>(std::chrono::duration_cast<std::chrono::seconds>(current_now - death_time).count());
+			int countdown = 5 - elapsed;
+			if (countdown < 0) countdown = 0;
+			
+			// Dim screen
+			Gdiplus::SolidBrush darkOverlay(Gdiplus::Color(180, 0, 0, 0));
+			graphics.FillRectangle(&darkOverlay, 0, 0, width, height);
+			
+			// Draw Countdown
+			if (countdown > 0) {
+				Gdiplus::Font hugeFont(&fontFamily, 72, Gdiplus::FontStyleBold, Gdiplus::UnitPixel);
+				Gdiplus::SolidBrush redBrush(Gdiplus::Color(255, 255, 50, 50));
+				std::wstring text = std::to_wstring(countdown);
+				
+				Gdiplus::StringFormat formatCenter;
+				formatCenter.SetAlignment(Gdiplus::StringAlignmentCenter);
+				formatCenter.SetLineAlignment(Gdiplus::StringAlignmentCenter);
+				
+				graphics.DrawString(text.c_str(), -1, &hugeFont, Gdiplus::RectF(0, 0, static_cast<float>(width), static_cast<float>(height)), &formatCenter, &redBrush);
+			}
+		} else {
+			is_dead = false;
 		}
 	}
 

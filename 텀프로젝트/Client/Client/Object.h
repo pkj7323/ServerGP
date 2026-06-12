@@ -10,7 +10,10 @@ public:
 	int16_t x, y;
 	float render_x = 0.0f;
 	float render_y = 0.0f;
-	char armor_tier = 0;
+	char head_tier = 0;
+	char chest_tier = 0;
+	char legs_tier = 0;
+	char boots_tier = 0;
 	char weapon_tier = 1;
 	short dir_x = 0;
 	short dir_y = -1;

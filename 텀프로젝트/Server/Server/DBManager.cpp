@@ -151,7 +151,8 @@ void DBManager::HandleLoginAuth(DBTask& task) {
 					SQLINTEGER tmp_x = 0, tmp_y = 0;
 					SQLINTEGER tmp_hp = 0, tmp_maxhp = 0;
 					SQLINTEGER tmp_level = 0, tmp_exp = 0;
-					SQLINTEGER tmp_armor = 0, tmp_weapon = 0;
+					SQLINTEGER tmp_head = 0, tmp_chest = 0, tmp_legs = 0, tmp_boots = 0;
+					SQLINTEGER tmp_weapon = 0;
 					SQLINTEGER tmp_gold = 0;
 
 					SQLGetData(hstmt, 1, SQL_C_CHAR,  tmp_uid,  sizeof(tmp_uid),  &ind);
@@ -162,9 +163,12 @@ void DBManager::HandleLoginAuth(DBTask& task) {
 					SQLGetData(hstmt, 6, SQL_C_SLONG, &tmp_maxhp, sizeof(tmp_maxhp), &ind);
 					SQLGetData(hstmt, 7, SQL_C_SLONG, &tmp_level, sizeof(tmp_level), &ind);
 					SQLGetData(hstmt, 8, SQL_C_SLONG, &tmp_exp,   sizeof(tmp_exp),   &ind);
-					SQLGetData(hstmt, 9, SQL_C_SLONG, &tmp_armor, sizeof(tmp_armor), &ind);
-					SQLGetData(hstmt, 10, SQL_C_SLONG, &tmp_weapon, sizeof(tmp_weapon), &ind);
-					SQLGetData(hstmt, 11, SQL_C_SLONG, &tmp_gold, sizeof(tmp_gold), &ind);
+					SQLGetData(hstmt, 9, SQL_C_SLONG, &tmp_head, sizeof(tmp_head), &ind);
+					SQLGetData(hstmt, 10, SQL_C_SLONG, &tmp_chest, sizeof(tmp_chest), &ind);
+					SQLGetData(hstmt, 11, SQL_C_SLONG, &tmp_legs, sizeof(tmp_legs), &ind);
+					SQLGetData(hstmt, 12, SQL_C_SLONG, &tmp_boots, sizeof(tmp_boots), &ind);
+					SQLGetData(hstmt, 13, SQL_C_SLONG, &tmp_weapon, sizeof(tmp_weapon), &ind);
+					SQLGetData(hstmt, 14, SQL_C_SLONG, &tmp_gold, sizeof(tmp_gold), &ind);
 
 					auto rtrim = [](char* str) {
 						int len = static_cast<int>(strnlen_s(str, MAX_NAME_LEN));
@@ -184,7 +188,10 @@ void DBManager::HandleLoginAuth(DBTask& task) {
 					result.max_hp = static_cast<int>(tmp_maxhp);
 					result.level = static_cast<int>(tmp_level);
 					result.exp = static_cast<int>(tmp_exp);
-					result.armor_tier = static_cast<int>(tmp_armor);
+					result.head_tier = static_cast<int>(tmp_head);
+					result.chest_tier = static_cast<int>(tmp_chest);
+					result.legs_tier = static_cast<int>(tmp_legs);
+					result.boots_tier = static_cast<int>(tmp_boots);
 					result.weapon_tier = static_cast<int>(tmp_weapon);
 					result.gold = static_cast<int>(tmp_gold);
 				}
@@ -238,7 +245,7 @@ void DBManager::HandleSaveData(DBTask& task) {
 	std::string uid(pd.user_id);
 	std::wstring w_uid(uid.begin(), uid.end());
 	
-	// update_user_data expects: user_id, x, y, hp, max_hp, level, exp, armor_tier, weapon_tier, gold
+	// update_user_data expects: user_id, x, y, hp, max_hp, level, exp, head_tier, chest_tier, legs_tier, boots_tier, weapon_tier, gold
 	std::wstring query = L"EXEC update_user_data '" + w_uid + L"', " 
 						+ std::to_wstring(pd.x) + L", " 
 						+ std::to_wstring(pd.y) + L", "
@@ -246,7 +253,10 @@ void DBManager::HandleSaveData(DBTask& task) {
 						+ std::to_wstring(pd.max_hp) + L", "
 						+ std::to_wstring(pd.level) + L", "
 						+ std::to_wstring(pd.exp) + L", "
-						+ std::to_wstring(pd.armor_tier) + L", "
+						+ std::to_wstring(pd.head_tier) + L", "
+						+ std::to_wstring(pd.chest_tier) + L", "
+						+ std::to_wstring(pd.legs_tier) + L", "
+						+ std::to_wstring(pd.boots_tier) + L", "
 						+ std::to_wstring(pd.weapon_tier) + L", "
 						+ std::to_wstring(pd.gold);
 

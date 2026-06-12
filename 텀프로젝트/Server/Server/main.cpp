@@ -63,6 +63,7 @@ SOCKET server_socket;
 constexpr int EVENT_MOVE = -1;
 constexpr int EVENT_RESPAWN = -2;
 constexpr int EVENT_PROJECTILE = -3;
+constexpr int EVENT_PLAYER_RESPAWN = -4;
 struct event_type {
 	int obj_id = -1;
 	std::chrono::time_point<std::chrono::system_clock> wakeup_time;
@@ -88,6 +89,7 @@ enum class io_type
 	npc_move,
 	npc_respawn,
 	npc_projectile,
+	player_respawn,
 	db_player_auth,
 	db_save_position,
 	count,
@@ -287,14 +289,23 @@ public:
 	virtual ~BaseObject() {}
 };
 
+enum class PlayerState {
+	ALIVE,
+	DEAD
+};
+
 class Player : public BaseObject {
 public:
-	int _armor = 0;
-	char _weapon_tier = 1;
+	std::atomic<PlayerState> _state{PlayerState::ALIVE};
 	short _dir_x = 0;
 	short _dir_y = -1;
 	int _hp = 100;
 	int _maxHp = 100;
+	int _head_tier = 0;
+	int _chest_tier = 0;
+	int _legs_tier = 0;
+	int _boots_tier = 0;
+	int _weapon_tier = 0;
 	int _level = 1;
 	int _exp = 0;
 
@@ -318,23 +329,19 @@ public:
 		inventory[item_id] += count;
 	}
 
-	char get_armor_tier() const {
-		if (_armor >= g_armor_config.netherite) return 4;
-		if (_armor >= g_armor_config.diamond) return 3;
-		if (_armor >= g_armor_config.iron) return 2;
-		if (_armor >= g_armor_config.copper) return 1;
-		return 0;
+	int get_part_defense(int tier) const {
+		switch (tier) {
+			case 1: return g_armor_config.copper / 4;
+			case 2: return g_armor_config.iron / 4;
+			case 3: return g_armor_config.diamond / 4;
+			case 4: return g_armor_config.netherite / 4;
+			default: return 0;
+		}
 	}
 
 	int get_defense() const {
-		char tier = get_armor_tier();
-		switch (tier) {
-			case 1: return 5;
-			case 2: return 10;
-			case 3: return 20;
-			case 4: return 30;
-			default: return 0;
-		}
+		return get_part_defense(_head_tier) + get_part_defense(_chest_tier) +
+		       get_part_defense(_legs_tier) + get_part_defense(_boots_tier);
 	}
 
 	int get_required_exp() const {
@@ -356,10 +363,14 @@ public:
 		return leveled_up;
 	}
 
+	int get_average_tier() const {
+		return (_head_tier + _chest_tier + _legs_tier + _boots_tier) / 4;
+	}
+
 	void update_max_hp() {
-		char tier = get_armor_tier();
+		int avg_tier = get_average_tier();
 		int new_max = 100 + (_level - 1) * 20; // 레벨당 20 증가
-		switch (tier) {
+		switch (avg_tier) {
 			case 1: new_max += 50; break;
 			case 2: new_max += 100; break;
 			case 3: new_max += 200; break;
@@ -370,17 +381,6 @@ public:
 			float ratio = (float)_hp / _maxHp;
 			_maxHp = new_max;
 			_hp = (int)(_maxHp * ratio);
-		}
-	}
-
-	void set_armor_tier(int next_tier)
-	{
-		switch (next_tier) {
-			case 1: _armor = g_armor_config.copper; break;
-			case 2: _armor = g_armor_config.iron; break;
-			case 3: _armor = g_armor_config.diamond; break;
-			case 4: _armor = g_armor_config.netherite; break;
-			default: _armor = 0; break;
 		}
 	}
 };
@@ -514,7 +514,10 @@ public:
 		info_packet.playerId = id_;
 		info_packet.x = player_->x_;
 		info_packet.y = player_->y_;
-		info_packet.armor_tier = player_->get_armor_tier();
+		info_packet.head_tier = player_->_head_tier;
+		info_packet.chest_tier = player_->_chest_tier;
+		info_packet.legs_tier = player_->_legs_tier;
+		info_packet.boots_tier = player_->_boots_tier;
 		info_packet.weapon_tier = player_->_weapon_tier;
 		info_packet.dir_x = player_->_dir_x;
 		info_packet.dir_y = player_->_dir_y;
@@ -593,7 +596,10 @@ public:
 		pd.level = player_->_level;
 		pd.exp = player_->_exp;
 		pd.gold = player_->_gold;
-		pd.armor_tier = static_cast<int>(player_->get_armor_tier());
+		pd.head_tier = player_->_head_tier;
+		pd.chest_tier = player_->_chest_tier;
+		pd.legs_tier = player_->_legs_tier;
+		pd.boots_tier = player_->_boots_tier;
 		pd.weapon_tier = static_cast<int>(player_->_weapon_tier);
 		pd.inventory = player_->inventory;
 		strncpy_s(pd.user_id, sizeof(pd.user_id), userId_, sizeof(pd.user_id) - 1);
@@ -614,6 +620,47 @@ public:
 };
 
 tbb::concurrent_unordered_map<int, std::atomic<std::shared_ptr<SESSION>>> clients;
+
+void player_take_damage(std::shared_ptr<SESSION> s, int actual_dmg)
+{
+	if (!s || !s->player_) return;
+	
+	if (s->player_->_state.load() == PlayerState::DEAD) return;
+
+	s->player_->_hp -= actual_dmg;
+	if (s->player_->_hp <= 0)
+	{
+		PlayerState expected = PlayerState::ALIVE;
+		if (s->player_->_state.compare_exchange_strong(expected, PlayerState::DEAD))
+		{
+			s->player_->_hp = 0;
+			int drop_amount = static_cast<int>(s->player_->get_required_exp() * 0.10f);
+			s->player_->_exp = std::max(0, s->player_->_exp - drop_amount);
+			
+			event_type ev;
+			ev.obj_id = s->id_;
+			ev.wakeup_time = std::chrono::system_clock::now() + std::chrono::seconds(5);
+			ev.event_id = EVENT_PLAYER_RESPAWN;
+			ev.target_id = -1;
+			timer_queue.push(ev);
+		}
+	}
+
+	S2C_StatusChange stat;
+	stat.size       = sizeof(stat);
+	stat.type       = S2C_STATUS_CHANGE;
+	stat.object_id  = s->id_;
+	stat.hp         = s->player_->_hp;
+	stat.max_hp     = s->player_->_maxHp;
+	stat.exp        = s->player_->_exp;
+	stat.level      = s->player_->_level;
+	stat.head_tier = s->player_->_head_tier;
+	stat.chest_tier = s->player_->_chest_tier;
+	stat.legs_tier = s->player_->_legs_tier;
+	stat.boots_tier = s->player_->_boots_tier;
+	stat.weapon_tier = s->player_->_weapon_tier;
+	s->do_send(stat.size, reinterpret_cast<char*>(&stat));
+}
 
 class NPC : public BaseObject {
 public:
@@ -657,7 +704,10 @@ public:
 			stat.max_hp     = _maxHp;
 			stat.exp        = _exp;
 			stat.level      = _level;
-			stat.armor_tier = 0;
+			stat.head_tier = 0;
+						stat.chest_tier = 0;
+						stat.legs_tier = 0;
+						stat.boots_tier = 0;
 			stat.weapon_tier = 0;
 
 			S2C_ChatMessage chat_pkt;
@@ -815,19 +865,7 @@ public:
 
 					int def = s->player_->get_defense();
 					int actual_dmg = std::max(1, _attack - def);
-					s->player_->_hp -= actual_dmg;
-					
-					S2C_StatusChange stat;
-					stat.size       = sizeof(stat);
-					stat.type       = S2C_STATUS_CHANGE;
-					stat.object_id  = action.target_id;
-					stat.hp         = s->player_->_hp;
-					stat.max_hp     = s->player_->_maxHp;
-					stat.exp        = s->player_->_exp;
-					stat.level      = s->player_->_level;
-					stat.armor_tier = s->player_->get_armor_tier();
-					stat.weapon_tier = s->player_->_weapon_tier;
-					s->do_send(stat.size, reinterpret_cast<char*>(&stat));
+					player_take_damage(s, actual_dmg);
 				}
 			}
 			break;
@@ -882,19 +920,7 @@ public:
 				if (d <= 2) {
 					int def = s->player_->get_defense();
 					int actual_dmg = std::max(1, (_attack * 2) - def);
-					s->player_->_hp -= actual_dmg; // 자폭 데미지
-					
-					S2C_StatusChange stat;
-					stat.size       = sizeof(stat);
-					stat.type       = S2C_STATUS_CHANGE;
-					stat.object_id  = pid;
-					stat.hp         = s->player_->_hp;
-					stat.max_hp     = s->player_->_maxHp;
-					stat.exp        = s->player_->_exp;
-					stat.level      = s->player_->_level;
-					stat.armor_tier = s->player_->get_armor_tier();
-					stat.weapon_tier = s->player_->_weapon_tier;
-					s->do_send(stat.size, reinterpret_cast<char*>(&stat));
+					player_take_damage(s, actual_dmg);
 				}
 			}
 			// 크리퍼 스스로 사망
@@ -1038,6 +1064,7 @@ bool SESSION::proccess_packet(unsigned char* buff)
 	}
 	case PACKET_TYPE::C2S_MOVE:
 	{
+		if (player_->_hp <= 0) return true;
 		auto now = std::chrono::system_clock::now();
 		auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - player_->last_move_timestamp_).count();
 		
@@ -1140,7 +1167,10 @@ bool SESSION::proccess_packet(unsigned char* buff)
 					add_pkt.max_hp    = npc->_maxHp;
 					add_pkt.exp       = npc->_exp;
 					add_pkt.level     = npc->_level;
-					add_pkt.armor_tier = 0; // NPCs don't have armor tier
+					add_pkt.head_tier = 0;
+						add_pkt.chest_tier = 0;
+						add_pkt.legs_tier = 0;
+						add_pkt.boots_tier = 0; // NPCs don't have armor tier
 					add_pkt.weapon_tier = 0;
 					add_pkt.dir_x = 0;
 					add_pkt.dir_y = -1;
@@ -1198,6 +1228,7 @@ bool SESSION::proccess_packet(unsigned char* buff)
 	}
 	case PACKET_TYPE::C2S_USE_QUICKSLOT:
 	{
+		if (player_->_hp <= 0) return true;
 		C2S_UseQuickSlot* pkt = reinterpret_cast<C2S_UseQuickSlot*>(buff);
 		auto now = std::chrono::system_clock::now();
 
@@ -1217,7 +1248,10 @@ bool SESSION::proccess_packet(unsigned char* buff)
 				stat.max_hp = player_->_maxHp;
 				stat.exp = player_->_exp;
 				stat.level = player_->_level;
-				stat.armor_tier = player_->get_armor_tier();
+				stat.head_tier = player_->_head_tier;
+					stat.chest_tier = player_->_chest_tier;
+					stat.legs_tier = player_->_legs_tier;
+					stat.boots_tier = player_->_boots_tier;
 				stat.weapon_tier = player_->_weapon_tier;
 				do_send(stat.size, reinterpret_cast<char*>(&stat));
 
@@ -1245,6 +1279,7 @@ bool SESSION::proccess_packet(unsigned char* buff)
 	}
 	case PACKET_TYPE::C2S_ATTACK:
 	{
+		if (player_->_hp <= 0) return true;
 		auto now = std::chrono::system_clock::now();
 		if (std::chrono::duration_cast<std::chrono::milliseconds>(now - player_->last_attack_time_).count() < g_player_config.attack_cooldown_ms) {
 			break; // Cooldown not met
@@ -1363,7 +1398,10 @@ bool SESSION::proccess_packet(unsigned char* buff)
 					stat.max_hp     = npc->_maxHp;
 					stat.exp        = npc->_exp;
 					stat.level      = npc->_level;
-					stat.armor_tier = 0;
+					stat.head_tier = 0;
+						stat.chest_tier = 0;
+						stat.legs_tier = 0;
+						stat.boots_tier = 0;
 					stat.weapon_tier = 0;
 					
 					do_send(stat.size, reinterpret_cast<char*>(&stat));
@@ -1434,7 +1472,10 @@ bool SESSION::proccess_packet(unsigned char* buff)
 						stat.max_hp     = player_->_maxHp;
 						stat.exp        = player_->_exp;
 						stat.level      = player_->_level;
-						stat.armor_tier = player_->get_armor_tier();
+						stat.head_tier = player_->_head_tier;
+					stat.chest_tier = player_->_chest_tier;
+					stat.legs_tier = player_->_legs_tier;
+					stat.boots_tier = player_->_boots_tier;
 						stat.weapon_tier = player_->_weapon_tier;
 						do_send(stat.size, reinterpret_cast<char*>(&stat));
 
@@ -1550,7 +1591,10 @@ bool SESSION::proccess_packet(unsigned char* buff)
 		stat.max_hp = player_->_maxHp;
 		stat.exp = player_->_exp;
 		stat.level = player_->_level;
-		stat.armor_tier = player_->get_armor_tier();
+		stat.head_tier = player_->_head_tier;
+					stat.chest_tier = player_->_chest_tier;
+					stat.legs_tier = player_->_legs_tier;
+					stat.boots_tier = player_->_boots_tier;
 		stat.weapon_tier = player_->_weapon_tier;
 		do_send(stat.size, reinterpret_cast<char*>(&stat));
 
@@ -1657,18 +1701,28 @@ bool SESSION::proccess_packet(unsigned char* buff)
 				} else { msg = "성직자: 골드가 부족합니다 (30G 필요)."; }
 			}
 		} else if (v_id == 7) { // Armorer
-			if (pkt->trade_index == 1) {
-				int next_tier = player_->get_armor_tier() + 1;
-				if (next_tier > 4) { msg = "대장장이: 이미 최고 등급의 갑옷을 입고 있군!"; }
+			auto try_upgrade_armor = [&](int& current_tier, const std::string& part_name) {
+				int next_tier = current_tier + 1;
+				if (next_tier > 4) { msg = "대장장이: 이미 최고 등급의 " + part_name + "을(를) 입고 있군!"; }
 				else {
 					int cost = next_tier * 150;
 					if (player_->_gold >= cost) {
 						player_->_gold -= cost;
-						player_->set_armor_tier(next_tier);
+						current_tier = next_tier;
 						success = true;
-						msg = "대장장이: 새 갑옷이 아주 잘 어울리는군!";
+						msg = "대장장이: 새 " + part_name + "이(가) 아주 잘 어울리는군!";
 					} else { msg = "대장장이: 골드가 부족하네 (" + std::to_string(cost) + "G 필요)."; }
 				}
+			};
+
+			if (pkt->trade_index == 1) {
+				try_upgrade_armor(player_->_head_tier, "투구");
+			} else if (pkt->trade_index == 2) {
+				try_upgrade_armor(player_->_chest_tier, "흉갑");
+			} else if (pkt->trade_index == 3) {
+				try_upgrade_armor(player_->_legs_tier, "바지");
+			} else if (pkt->trade_index == 4) {
+				try_upgrade_armor(player_->_boots_tier, "부츠");
 			}
 		} else if (v_id == 8) { // Weaponsmith
 			if (pkt->trade_index == 1) {
@@ -1718,7 +1772,10 @@ bool SESSION::proccess_packet(unsigned char* buff)
 			stat.max_hp = player_->_maxHp;
 			stat.exp = player_->_exp;
 			stat.level = player_->_level;
-			stat.armor_tier = player_->get_armor_tier();
+			stat.head_tier = player_->_head_tier;
+					stat.chest_tier = player_->_chest_tier;
+					stat.legs_tier = player_->_legs_tier;
+					stat.boots_tier = player_->_boots_tier;
 			stat.weapon_tier = player_->_weapon_tier;
 			do_send(stat.size, reinterpret_cast<char*>(&stat));
 
@@ -1796,7 +1853,10 @@ void SESSION::send_add_player(int player_id)
 	strncpy_s(add_packet.obj_name, session->player_->userName_, MAX_NAME_LEN);
 	add_packet.x = session->player_->x_;
 	add_packet.y = session->player_->y_;
-	add_packet.armor_tier = session->player_->get_armor_tier();
+	add_packet.head_tier = session->player_->_head_tier;
+					add_packet.chest_tier = session->player_->_chest_tier;
+					add_packet.legs_tier = session->player_->_legs_tier;
+					add_packet.boots_tier = session->player_->_boots_tier;
 	add_packet.weapon_tier = session->player_->_weapon_tier;
 	add_packet.dir_x = session->player_->_dir_x;
 	add_packet.dir_y = session->player_->_dir_y;
@@ -1838,7 +1898,10 @@ void SESSION::send_already_spawn_players()
 					add_pkt.max_hp    = npc->_maxHp;
 					add_pkt.exp       = npc->_exp;
 					add_pkt.level     = npc->_level;
-					add_pkt.armor_tier = 0;
+					add_pkt.head_tier = 0;
+						add_pkt.chest_tier = 0;
+						add_pkt.legs_tier = 0;
+						add_pkt.boots_tier = 0;
 					add_pkt.weapon_tier = 0;
 					add_pkt.dir_x = 0;
 					add_pkt.dir_y = -1;
@@ -2056,6 +2119,13 @@ void timer_thread()
 					PostQueuedCompletionStatus(h_iocp, -1, top_ev.obj_id, &proj_over->over);
 				}
 				break;
+				case EVENT_PLAYER_RESPAWN:
+				{
+					EXP_OVER* p_respawn_over = new EXP_OVER;
+					p_respawn_over->type = io_type::player_respawn;
+					PostQueuedCompletionStatus(h_iocp, -1, top_ev.obj_id, &p_respawn_over->over);
+				}
+				break;
 				default:
 					std::cout << "Unknown Event Type in Timer Thread!" << std::endl;
 					break;
@@ -2122,18 +2192,9 @@ void worker_thread()
 			new_session->state_ = client_state::connected;
 			if (new_session->player_) {
 				new_session->player_->id_ = current_id;
-				new_session->player_->x_ = 1000 + 100;
-				new_session->player_->y_ = 1000;
-				new_session->player_->_armor = g_armor_config.netherite;
-				new_session->player_->update_max_hp(); // 체력 최대치 업데이트
-
-				sector.add_object(current_id, new_session->player_->x_, new_session->player_->y_);
 			}
 			clients.emplace(current_id, new_session);
-			new_session->send_login_success();
 			new_session->do_recv();
-
-
 
 			o->accept_socket = WSASocket(AF_INET, SOCK_STREAM, 0, NULL, 0, WSA_FLAG_OVERLAPPED);
 			ZeroMemory(&o->over, sizeof(o->over));
@@ -2273,7 +2334,10 @@ void worker_thread()
 					add_pkt.max_hp    = npc->_maxHp;
 					add_pkt.exp       = npc->_exp;
 					add_pkt.level     = npc->_level;
-					add_pkt.armor_tier = 0;
+					add_pkt.head_tier = 0;
+						add_pkt.chest_tier = 0;
+						add_pkt.legs_tier = 0;
+						add_pkt.boots_tier = 0;
 					add_pkt.weapon_tier = 0;
 					add_pkt.dir_x = 0;
 					add_pkt.dir_y = -1;
@@ -2311,6 +2375,156 @@ void worker_thread()
 			}
 			break;
 		}
+		case io_type::player_respawn:
+		{
+			delete o;
+			std::shared_ptr<SESSION> s = clients[id].load();
+			if (s && s->player_ && s->state_ == client_state::playing)
+			{
+				int old_x, old_y;
+				{
+					PlayerState expected = PlayerState::DEAD;
+					s->player_->_state.compare_exchange_strong(expected, PlayerState::ALIVE);
+					
+					s->player_->_hp = s->player_->_maxHp;
+					old_x = s->player_->x_;
+					old_y = s->player_->y_;
+					s->player_->x_ = 1000;
+					s->player_->y_ = 1000;
+				}
+				
+				sector.move_object(s->id_, old_x, old_y, 1000, 1000);
+				
+				S2C_StatusChange stat;
+				stat.size       = sizeof(stat);
+				stat.type       = S2C_STATUS_CHANGE;
+				stat.object_id  = s->id_;
+				stat.hp         = s->player_->_hp;
+				stat.max_hp     = s->player_->_maxHp;
+				stat.exp        = s->player_->_exp;
+				stat.level      = s->player_->_level;
+				stat.head_tier = s->player_->_head_tier;
+					stat.chest_tier = s->player_->_chest_tier;
+					stat.legs_tier = s->player_->_legs_tier;
+					stat.boots_tier = s->player_->_boots_tier;
+				stat.weapon_tier = s->player_->_weapon_tier;
+				s->do_send(stat.size, reinterpret_cast<char*>(&stat));
+
+				S2C_MoveObject move_packet;
+				move_packet.size = sizeof(S2C_MoveObject);
+				move_packet.type = PACKET_TYPE::S2C_MOVE_OBJECT;
+				move_packet.object_id = s->id_;
+				move_packet.x = s->player_->x_;
+				move_packet.y = s->player_->y_;
+				move_packet.dir_x = s->player_->_dir_x;
+				move_packet.dir_y = s->player_->_dir_y;
+				move_packet.move_time = 0;
+				s->do_send(move_packet.size, reinterpret_cast<char*>(&move_packet));
+				
+				// Recompute visibility
+				auto old_view = s->visible_players;
+				std::unordered_set<int> new_visible_players;
+				auto object_ids_nearby_sector = sector.get_objects_nearby_sector(s->player_->x_, s->player_->y_);
+				for (auto& oid : object_ids_nearby_sector)
+				{
+					if (oid == s->id_) continue;
+
+					if (is_npc_id(oid)) {
+						auto npc = npcs[oid].load();
+						if (s->is_visible(npc->x_, npc->y_)) {
+							new_visible_players.insert(oid);
+						}
+						continue;
+					}
+
+					auto it = clients.find(oid);
+					if (it == clients.end()) continue;
+					std::shared_ptr<SESSION> other_s = it->second.load();
+					if (!other_s || other_s->state_ != client_state::playing) continue;
+
+					if (other_s->is_visible(s->player_->x_, s->player_->y_))
+					{
+						new_visible_players.insert(oid);
+					}
+				}
+
+				for (auto& oid : new_visible_players)
+				{
+					if (!old_view.contains(oid))
+					{
+						if (is_npc_id(oid)) {
+							auto npc = npcs[oid].load();
+							S2C_AddObject add_pkt;
+							add_pkt.size = sizeof(add_pkt);
+							add_pkt.type = PACKET_TYPE::S2C_ADD_OBJECT;
+							add_pkt.object_id = oid;
+							add_pkt.x = npc->x_;
+							add_pkt.y = npc->y_;
+							strcpy_s(add_pkt.obj_name, npc->userName_);
+							add_pkt.visual_id = npc->_visualId;
+							add_pkt.hp        = npc->_hp;
+							add_pkt.max_hp    = npc->_maxHp;
+							add_pkt.exp       = npc->_exp;
+							add_pkt.level     = npc->_level;
+							add_pkt.head_tier = 0;
+						add_pkt.chest_tier = 0;
+						add_pkt.legs_tier = 0;
+						add_pkt.boots_tier = 0;
+							add_pkt.weapon_tier = 0;
+							add_pkt.dir_x = 0;
+							add_pkt.dir_y = -1;
+							add_pkt.npc_state = static_cast<char>(npc->_aiState);
+							s->do_send(add_pkt.size, reinterpret_cast<char*>(&add_pkt));
+
+							npc->wake_up();
+
+							s->visible_players_mutex.lock();
+							s->visible_players.insert(oid);
+							s->visible_players_mutex.unlock();
+						}
+						else {
+							s->send_add_player(oid);
+							std::shared_ptr<SESSION> other_s = clients[oid].load();
+							if (other_s) other_s->send_add_player(s->id_);
+						}
+					}
+					else
+					{
+						if (!is_npc_id(oid)) {
+							std::shared_ptr<SESSION> other_s = clients[oid].load();
+							if (other_s && other_s->state_ == client_state::playing)
+							{
+								other_s->send_move_packet(s->id_, 0);
+							}
+						}
+					}
+				}
+
+				for (auto& oid : old_view)
+				{
+					if (!new_visible_players.contains(oid))
+					{
+						if (is_npc_id(oid)) {
+							S2C_RemoveObject remove_pkt;
+							remove_pkt.size = sizeof(remove_pkt);
+							remove_pkt.type = PACKET_TYPE::S2C_REMOVE_OBJECT;
+							remove_pkt.object_id = oid;
+							s->do_send(remove_pkt.size, reinterpret_cast<char*>(&remove_pkt));
+
+							s->visible_players_mutex.lock();
+							s->visible_players.erase(oid);
+							s->visible_players_mutex.unlock();
+						}
+						else {
+							s->send_remove_player(oid);
+							std::shared_ptr<SESSION> other_s = clients[oid].load();
+							if (other_s) other_s->send_remove_player(s->id_);
+						}
+					}
+				}
+			}
+			break;
+		}
 		case io_type::npc_projectile:
 		{
 			event_type ev = o->event_data;
@@ -2342,19 +2556,7 @@ void worker_thread()
 						hit_player = true;
 						int def = ps->player_->get_defense();
 						int actual_dmg = std::max(1, ev.attack_power - def);
-						ps->player_->_hp -= actual_dmg;
-						
-						S2C_StatusChange stat;
-						stat.size       = sizeof(stat);
-						stat.type       = S2C_STATUS_CHANGE;
-						stat.object_id  = pid;
-						stat.hp         = ps->player_->_hp;
-						stat.max_hp     = ps->player_->_maxHp;
-						stat.exp        = ps->player_->_exp;
-						stat.level      = ps->player_->_level;
-						stat.armor_tier = ps->player_->get_armor_tier();
-						stat.weapon_tier = ps->player_->_weapon_tier;
-						ps->do_send(stat.size, reinterpret_cast<char*>(&stat));
+						player_take_damage(ps, actual_dmg);
 					}
 				}
 			}
@@ -2384,7 +2586,10 @@ void worker_thread()
 					{
 						new_session->player_->x_ = result.x;
 						new_session->player_->y_ = result.y;
-						new_session->player_->_armor = result.armor_tier;
+						new_session->player_->_head_tier = result.head_tier;
+						new_session->player_->_chest_tier = result.chest_tier;
+						new_session->player_->_legs_tier = result.legs_tier;
+						new_session->player_->_boots_tier = result.boots_tier;
 						new_session->player_->_weapon_tier = result.weapon_tier;
 						new_session->player_->_hp = result.hp;
 						new_session->player_->_maxHp = result.max_hp;
@@ -2398,6 +2603,7 @@ void worker_thread()
 						strncpy_s(new_session->userId_, sizeof(new_session->userId_), result.user_id, sizeof(new_session->userId_) - 1);
 						strncpy_s(new_session->player_->userName_, sizeof(new_session->player_->userName_), result.user_name, MAX_NAME_LEN);
 						
+						new_session->send_login_success();
 						sector.add_object(id, new_session->player_->x_, new_session->player_->y_);
 						new_session->send_avatar_info();
 						new_session->send_inventory_sync();
