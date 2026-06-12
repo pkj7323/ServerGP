@@ -42,6 +42,7 @@ enum PACKET_TYPE {
 	S2C_NPC_STATE_CHANGE,	// Server to Client: NPC state changed (IDLE/PATROL/AGGRO etc)
 	S2C_OPEN_TRADE_UI,  // Server to Client: Open trading UI for specific merchant
 	S2C_TRADE_RESULT,   // Server to Client: Result of trade (chat message)
+	S2C_QUEST_INFO,     // Server to Client: Quest stage and progress update
 };
 
 // NPC AI 상태 - 클라이언트와 서버가 공유하는 enum
@@ -66,6 +67,7 @@ enum class ItemType : int {
 	
 	HEALTH_POTION = 7,
 	MANA_POTION = 8,
+	ENDER_PEARL = 9,
 };
 
 #pragma pack(push, 1) // Ensure no padding between struct members
@@ -266,5 +268,15 @@ struct S2C_TradeResult {
 	bool success;
 	char message[MAX_CHAT_MSG_LEN];
 };
+
+#pragma pack(push, 1)
+struct S2C_QuestInfo {
+	unsigned char size;
+	PACKET_TYPE   type;
+	int quest_stage;
+	int quest_progress;
+	int max_progress;
+};
+#pragma pack(pop)
 
 #pragma pack(pop) // Restore default packing

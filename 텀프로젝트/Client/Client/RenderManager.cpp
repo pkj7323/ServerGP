@@ -229,8 +229,11 @@ static auto last_time = std::chrono::steady_clock::now();
 			int imgW = cellWidth - padX * 2;
 			int imgH = cellHeight - padY * 2;
 
-			if (npc.visual_id > 0 && npc.visual_id <= 9 && _mob_heads[npc.visual_id]) {
-				DrawBmpTransparent(memDC, memDC2, _mob_heads[npc.visual_id], px, py, imgW, imgH);
+			int draw_visual_id = npc.visual_id;
+			if (draw_visual_id == 10) draw_visual_id = 9; // Quest NPC uses Librarian head
+
+			if (draw_visual_id > 0 && draw_visual_id <= 9 && _mob_heads[draw_visual_id]) {
+				DrawBmpTransparent(memDC, memDC2, _mob_heads[draw_visual_id], px, py, imgW, imgH);
 			} else {
 				HBRUSH hBrush = CreateSolidBrush(RGB(0, 255, 0));
 				HBRUSH oldB = (HBRUSH)SelectObject(memDC, hBrush);
@@ -335,6 +338,31 @@ static auto last_time = std::chrono::steady_clock::now();
 				graphics.DrawString(L"!", -1, &aggroFont, Gdiplus::PointF((float)(px - 3), (float)(py + 1)), &shadowBrush);
 				// 느낌표
 				graphics.DrawString(L"!", -1, &aggroFont, Gdiplus::PointF((float)(px - 4), (float)(py)), &aggroBrush);
+			}
+		}
+
+		// 4.5.6 Draw Quest Indicators on Quest NPC (visual_id == 10)
+		for (auto& [id, npc] : npcs) {
+			if (npc.visual_id != 10) continue;
+			float rel_x = npc.render_x - left_x;
+			float rel_y = npc.render_y - bottom_y;
+			if (rel_x >= 0 && rel_x < VIEW_WIDTH && rel_y >= 0 && rel_y < VIEW_HEIGHT) {
+				float screen_y = (VIEW_HEIGHT - 1.0f - rel_y);
+				int px = (int)(rel_x * cellWidth) + cellWidth / 2 - 6;
+				int py = (int)(screen_y * cellHeight) - 60; // Moved higher above name/HP
+				Gdiplus::Font questFont(&fontFamily, 20, Gdiplus::FontStyleBold, Gdiplus::UnitPixel);
+				
+				bool is_complete = (gm->quest_progress() >= gm->max_quest_progress() && gm->quest_stage() < 6);
+				Gdiplus::SolidBrush markBrush(is_complete ? Gdiplus::Color(255, 50, 255, 50) : Gdiplus::Color(255, 255, 200, 50));
+				Gdiplus::SolidBrush shadowBrush(Gdiplus::Color(200, 0, 0, 0));
+				
+				const wchar_t* markStr = is_complete ? L"?" : L"!";
+				if (gm->quest_stage() >= 6) markStr = L""; // All quests completed
+				
+				if (markStr[0] != L'\0') {
+					graphics.DrawString(markStr, -1, &questFont, Gdiplus::PointF((float)(px + 1), (float)(py + 1)), &shadowBrush);
+					graphics.DrawString(markStr, -1, &questFont, Gdiplus::PointF((float)(px), (float)(py)), &markBrush);
+				}
 			}
 		}
 
@@ -699,17 +727,6 @@ static auto last_time = std::chrono::steady_clock::now();
 					if (sword_img) graphics.DrawImage(sword_img, eqSlotX_sword + 3, eqSlotY + 3, 24, 24);
 				}
 
-				// Draw Level and EXP
-				Gdiplus::Font boldFont(&fontFamily, 14, Gdiplus::FontStyleBold, Gdiplus::UnitPixel);
-				Gdiplus::SolidBrush cyanBrush(Gdiplus::Color(255, 0, 255, 255)); // Cyan for level
-				Gdiplus::SolidBrush yellowBrush(Gdiplus::Color(255, 255, 255, 0)); // Yellow for exp
-				
-				std::wstring lvStr = L"Lv." + std::to_wstring(my_player.level);
-				unsigned long long required_exp = static_cast<unsigned long long>(my_player.level) * my_player.level * 100;
-				std::wstring expStr = L"Exp: " + std::to_wstring(my_player.exp) + L" / " + std::to_wstring(required_exp);
-				
-				graphics.DrawString(lvStr.c_str(), -1, &boldFont, Gdiplus::PointF(static_cast<float>(invX + 150), static_cast<float>(invY + 45)), &cyanBrush);
-				graphics.DrawString(expStr.c_str(), -1, &boldFont, Gdiplus::PointF(static_cast<float>(invX + 210), static_cast<float>(invY + 45)), &yellowBrush);
 			}
 
 			// --- Draw List-Based Inventory Items ---
@@ -798,6 +815,80 @@ static auto last_time = std::chrono::steady_clock::now();
 
 	if (gm->players().contains(gm->my_id())) {
 		auto& my_player = gm->players()[gm->my_id()];
+
+		// Draw Quest Tracker UI
+		{
+			Gdiplus::Font questFont(&fontFamily, 14, Gdiplus::FontStyleBold, Gdiplus::UnitPixel);
+			Gdiplus::SolidBrush shadowBrush(Gdiplus::Color(200, 0, 0, 0));
+			Gdiplus::SolidBrush textBrush(Gdiplus::Color(255, 255, 200, 50));
+			Gdiplus::SolidBrush completeBrush(Gdiplus::Color(255, 50, 255, 50));
+			
+			std::wstring q_text = L"[메인 퀘스트] ";
+			int stage = gm->quest_stage();
+			int prog = gm->quest_progress();
+			int max_prog = gm->max_quest_progress();
+			
+			if (stage == 0) q_text += L"철골렘 사냥";
+			else if (stage == 1) q_text += L"좀비 사냥";
+			else if (stage == 2) q_text += L"스켈레톤 사냥";
+			else if (stage == 3) q_text += L"크리퍼 사냥";
+			else if (stage == 4) q_text += L"엔더맨 사냥";
+			else if (stage == 5) q_text += L"엔더드래곤 토벌";
+			else q_text += L"모든 임무 완료!";
+			
+			if (stage < 6) {
+				q_text += L" (" + std::to_wstring(prog) + L" / " + std::to_wstring(max_prog) + L")";
+			}
+			
+			int q_x = 20;
+			int q_y = 20;
+			
+			graphics.DrawString(q_text.c_str(), -1, &questFont, Gdiplus::PointF((float)q_x+1, (float)q_y+1), &shadowBrush);
+			graphics.DrawString(q_text.c_str(), -1, &questFont, Gdiplus::PointF((float)q_x, (float)q_y), prog >= max_prog && stage < 6 ? &completeBrush : &textBrush);
+		}
+
+		// Draw EXP Bar at the top
+		{
+			int barWidth = 400;
+			int barHeight = 12;
+			int barX = (width - barWidth) / 2;
+			int barY = 10; // Top of the screen
+
+			unsigned long long required_exp = static_cast<unsigned long long>(my_player.level) * my_player.level * 100;
+			float expRatio = required_exp > 0 ? (float)my_player.exp / required_exp : 0.0f;
+			if (expRatio > 1.0f) expRatio = 1.0f;
+			int fillWidth = static_cast<int>(barWidth * expRatio);
+
+			// Background
+			Gdiplus::SolidBrush bgBrush(Gdiplus::Color(255, 50, 50, 50));
+			graphics.FillRectangle(&bgBrush, barX, barY, barWidth, barHeight);
+
+			// Fill (Minecraft XP style green)
+			Gdiplus::SolidBrush fillBrush(Gdiplus::Color(255, 128, 255, 32));
+			graphics.FillRectangle(&fillBrush, barX, barY, fillWidth, barHeight);
+
+			// Border
+			Gdiplus::Pen borderPen(Gdiplus::Color(255, 0, 0, 0), 2);
+			graphics.DrawRectangle(&borderPen, barX, barY, barWidth, barHeight);
+
+			// Texts
+			Gdiplus::Font smallFont(&fontFamily, 12, Gdiplus::FontStyleBold, Gdiplus::UnitPixel);
+			Gdiplus::Font boldFont(&fontFamily, 16, Gdiplus::FontStyleBold, Gdiplus::UnitPixel);
+			Gdiplus::SolidBrush whiteBrush(Gdiplus::Color(255, 255, 255, 255));
+			Gdiplus::SolidBrush cyanBrush(Gdiplus::Color(255, 0, 255, 255));
+
+			Gdiplus::StringFormat formatCenter;
+			formatCenter.SetAlignment(Gdiplus::StringAlignmentCenter);
+			formatCenter.SetLineAlignment(Gdiplus::StringAlignmentCenter);
+
+			// EXP Text inside the bar
+			std::wstring expStr = L"Exp: " + std::to_wstring(my_player.exp) + L" / " + std::to_wstring(required_exp);
+			graphics.DrawString(expStr.c_str(), -1, &smallFont, Gdiplus::RectF(static_cast<float>(barX), static_cast<float>(barY), static_cast<float>(barWidth), static_cast<float>(barHeight)), &formatCenter, &whiteBrush);
+
+			// Level Text below the bar
+			std::wstring lvStr = L"Lv. " + std::to_wstring(my_player.level);
+			graphics.DrawString(lvStr.c_str(), -1, &boldFont, Gdiplus::RectF(static_cast<float>(barX), static_cast<float>(barY + 16), static_cast<float>(barWidth), 20.0f), &formatCenter, &cyanBrush);
+		}
 		static bool is_dead = false;
 		static std::chrono::time_point<std::chrono::steady_clock> death_time;
 		

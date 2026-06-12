@@ -47,12 +47,12 @@ struct SpawnEntry {
 
 // =============================================================================
 // load_npc_config_lua()
-//   npc_config.lua를 Lua VM으로 읽어 NPC_TYPES[1~9]를 NpcMeta 배열로 반환.
+//   npc_config.lua를 Lua VM으로 읽어 NPC_TYPES[1~15]를 NpcMeta 배열로 반환.
 //   인덱스 0은 NPC_NONE (빈 값).
 // =============================================================================
-inline std::array<NpcMeta, 10> load_npc_config_lua(const char* lua_path)
+inline std::array<NpcMeta, 20> load_npc_config_lua(const char* lua_path)
 {
-	std::array<NpcMeta, 10> meta{};
+	std::array<NpcMeta, 20> meta{};
 
 	lua_State* L = luaL_newstate();
 	luaL_openlibs(L);
@@ -71,7 +71,7 @@ inline std::array<NpcMeta, 10> load_npc_config_lua(const char* lua_path)
 		return meta;
 	}
 
-	for (int type_id = 1; type_id <= 9; ++type_id)
+	for (int type_id = 1; type_id <= 15; ++type_id)
 	{
 		lua_pushinteger(L, type_id);
 		lua_gettable(L, -2);   // NPC_TYPES[type_id]

@@ -297,6 +297,14 @@ void NetworkManager::process_packet(char* ptr)
 		gm->add_chat_log(logMsg);
 		break;
 	}
+	case S2C_QUEST_INFO:
+	{
+		S2C_QuestInfo* p = reinterpret_cast<S2C_QuestInfo*>(ptr);
+		gm->set_quest_stage(p->quest_stage);
+		gm->set_quest_progress(p->quest_progress);
+		gm->set_max_quest_progress(p->max_progress);
+		break;
+	}
 	default:
 		std::cout << "Unknown packet type: " << (int)type << "\n";
 		__debugbreak();

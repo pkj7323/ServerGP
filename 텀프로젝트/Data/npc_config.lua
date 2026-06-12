@@ -111,6 +111,26 @@ NPC_TYPES = {
         drop_item  = 0,
         drop_gold  = 0,
     },
+    [10] = {
+        name       = "Quest NPC",
+        hp         = 9999,
+        level      = 99,
+        exp        = 0,
+        attack     = 0,
+        visual_id  = 10,
+        drop_item  = 0,
+        drop_gold  = 0,
+    },
+    [11] = {
+        name       = "Ender Dragon",
+        hp         = 2000,
+        level      = 50,
+        exp        = 1000,
+        attack     = 100,
+        visual_id  = 11,
+        drop_item  = 9, -- Ender Pearl
+        drop_gold  = 100,
+    },
 }
 
 -- =============================================================================
@@ -121,10 +141,11 @@ MERCHANT_SPAWNS = {
     { type_id = 7, x = 995, y = 1005 },
     { type_id = 8, x = 1005, y = 995 },
     { type_id = 9, x = 995, y = 995 },
+    { type_id = 10, x = 1000, y = 1002 }, -- Quest NPC
 }
 
 -- =============================================================================
--- 스폰 존 정보 (Map Generator와 동일한 수치 - 참조용)
+-- 스폰 존 정보 (Map Generator와 동일하게 유지 - 참조용)
 -- 실제 스폰 좌표는 map_spawn.bin 바이너리에서 읽어옴
 -- =============================================================================
 SPAWN_ZONES = {
@@ -133,6 +154,7 @@ SPAWN_ZONES = {
     { type_id = 2, name = "Skeleton",        min_radius = 150, max_radius = 400,  count = 25000 },
     { type_id = 3, name = "Creeper",         min_radius = 400, max_radius = 700,  count = 70000 },
     { type_id = 4, name = "Enderman",        min_radius = 700, max_radius = 9999, count = 60000 },
+    { type_id = 11, name = "Ender Dragon",   min_radius = 1000, max_radius = 1500, count = 50 }, -- Boss
 }
 
 -- =============================================================================

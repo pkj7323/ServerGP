@@ -28,6 +28,8 @@ struct player_data {
 	int level;
 	int exp;
 	int gold;
+	int quest_stage;
+	int quest_progress;
 	std::unordered_map<int, int> inventory;
 };
 

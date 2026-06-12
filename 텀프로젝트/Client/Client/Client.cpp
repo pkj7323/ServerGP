@@ -1,12 +1,13 @@
+﻿#include <algorithm>
+
 #include "pch.h"
 #include "GameManager.h"
 #include "NetworkManager.h"
 #include "RenderManager.h"
 
 
-int g_client_move_cooldown_ms = 500;
+int g_client_move_cooldown_ms = 50;
 auto g_last_move_time = std::chrono::steady_clock::now();
-
 void load_client_config() {
 	std::ifstream file("../../Data/player_config.lua");
 	if (!file.is_open()) {
@@ -149,45 +150,14 @@ LRESULT CALLBACK window_proc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lPar
 			return 0;
 		}
 
-		int curr_x = gm->players()[gm->my_id()].x;
-		int curr_y = gm->players()[gm->my_id()].y;
-
-		short dx = 0;
-		short dy = 0;
-
 		switch (wParam) {
-		case VK_LEFT:  dx = -1; break;
-		case VK_RIGHT: dx = 1;  break;
-		case VK_UP:    dy = 1;  break; // Y-up: 위로 가면 Y 증가 (+1)
-		case VK_DOWN:  dy = -1; break; // Y-up: 아래로 가면 Y 감소 (-1)
+		case VK_LEFT:
+		case VK_RIGHT:
+		case VK_UP:
+		case VK_DOWN:
+			return 0; // handled by GetAsyncKeyState in main loop
 		case VK_ESCAPE: gm->set_running(false); return 0;
 		default: return DefWindowProc(hWnd, message, wParam, lParam);
-		}
-
-		if (dx != 0 || dy != 0) {
-			auto now = std::chrono::steady_clock::now();
-			auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - g_last_move_time).count();
-			if (elapsed < g_client_move_cooldown_ms) {
-				return 0; // Ignore input
-			}
-			g_last_move_time = now;
-		}
-
-		// 클라이언트 사이드 충돌 체크 (현재 위치 + 방향)
-		if (gm->can_move(curr_x + dx, curr_y + dy)) {
-
-			// C2S_Move는 방향(dx, dy)을 담아서 서버로 전송
-			C2S_Move p;
-			p.size = sizeof(p);
-			p.type = C2S_MOVE;
-			p.x = dx;
-			p.y = dy;
-			p.move_time = 0;
-
-			NetworkManager::Instance()->send_packet(&p);
-
-			// 참고: S2C_MOVE_OBJECT를 받기 전까지 클라이언트 화면은
-			// 갱신되지 않으므로, 0.5초 쿨타임 처리는 서버가 담당합니다.
 		}
 		return 0;
 	}
@@ -209,8 +179,13 @@ int WINAPI WinMain(HINSTANCE hI, HINSTANCE hP, LPSTR lp, int nS) {
 	wc.hCursor = LoadCursor(NULL, IDC_ARROW);
 	RegisterClass(&wc);
 
+	RECT rect = { 0, 0, WINDOW_WIDTH, WINDOW_HEIGHT };
+	AdjustWindowRect(&rect, WS_OVERLAPPEDWINDOW, FALSE);
+	int wndWidth = rect.right - rect.left;
+	int wndHeight = rect.bottom - rect.top;
+
 	HWND hWnd = CreateWindowEx(0, CLASS_NAME, L"Chess Client - PKJ", WS_OVERLAPPEDWINDOW,
-		CW_USEDEFAULT, CW_USEDEFAULT, 1280, 720, NULL, NULL, hI, NULL);
+		CW_USEDEFAULT, CW_USEDEFAULT, wndWidth, wndHeight, NULL, NULL, hI, NULL);
 
 	AllocConsole();
 	FILE* f;
@@ -259,6 +234,44 @@ int WINAPI WinMain(HINSTANCE hI, HINSTANCE hP, LPSTR lp, int nS) {
 			DispatchMessage(&msg);
 		}
 		else {
+			if (gm->players().contains(gm->my_id()) && gm->players()[gm->my_id()].hp > 0 && !gm->is_chatting() && !gm->show_inventory() && !gm->is_trading()) {
+				auto now = std::chrono::steady_clock::now();
+				auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - g_last_move_time).count();
+				if (elapsed >= g_client_move_cooldown_ms) {
+					short dx = 0;
+					short dy = 0;
+					if (GetAsyncKeyState(VK_LEFT) & 0x8000) dx -= 1;
+					if (GetAsyncKeyState(VK_RIGHT) & 0x8000) dx += 1;
+					if (GetAsyncKeyState(VK_UP) & 0x8000) dy += 1;
+					if (GetAsyncKeyState(VK_DOWN) & 0x8000) dy -= 1;
+
+					// WASD support
+					if (GetAsyncKeyState('A') & 0x8000) dx -= 1;
+					if (GetAsyncKeyState('D') & 0x8000) dx += 1;
+					if (GetAsyncKeyState('W') & 0x8000) dy += 1;
+					if (GetAsyncKeyState('S') & 0x8000) dy -= 1;
+
+					// Clamp to -1, 0, 1
+					dx = std::clamp(dx, static_cast<short>(-1), static_cast<short>(1));
+					dy = std::clamp(dy, static_cast<short>(-1), static_cast<short>(1));
+
+					if (dx != 0 || dy != 0) {
+						int curr_x = gm->players()[gm->my_id()].x;
+						int curr_y = gm->players()[gm->my_id()].y;
+						if (gm->can_move(curr_x + dx, curr_y + dy)) {
+							C2S_Move p;
+							p.size = sizeof(p);
+							p.type = C2S_MOVE;
+							p.x = dx;
+							p.y = dy;
+							p.move_time = 0;
+							NetworkManager::Instance()->send_packet(&p);
+							g_last_move_time = now;
+						}
+					}
+				}
+			}
+
 			nm->process_network();
 			rm->Render(hWnd);
 		}

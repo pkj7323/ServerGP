@@ -222,6 +222,31 @@ void DBManager::HandleLoginAuth(DBTask& task) {
 					}
 					SQLFreeHandle(SQL_HANDLE_STMT, inv_hstmt);
 				}
+
+				// Fetch quest data (quest_id = 1 for Main Quest)
+				SQLHSTMT quest_hstmt = SQL_NULL_HSTMT;
+				retcode = SQLAllocHandle(SQL_HANDLE_STMT, m_hdbc, &quest_hstmt);
+				if (retcode == SQL_SUCCESS) {
+					query = L"EXEC select_quest_data '" + w_uid + L"', 1";
+					retcode = SQLExecDirect(quest_hstmt, (SQLWCHAR*)query.c_str(), SQL_NTS);
+					
+					if (retcode == SQL_SUCCESS || retcode == SQL_SUCCESS_WITH_INFO) {
+						retcode = SQLFetch(quest_hstmt);
+						if (retcode == SQL_SUCCESS || retcode == SQL_SUCCESS_WITH_INFO) {
+							SQLINTEGER tmp_qstage = 0, tmp_qprog = 0;
+							SQLLEN ind;
+							SQLGetData(quest_hstmt, 1, SQL_C_SLONG, &tmp_qstage, sizeof(tmp_qstage), &ind);
+							SQLGetData(quest_hstmt, 2, SQL_C_SLONG, &tmp_qprog, sizeof(tmp_qprog), &ind);
+							result.quest_stage = static_cast<int>(tmp_qstage);
+							result.quest_progress = static_cast<int>(tmp_qprog);
+						}
+					} else {
+						// If SP fails or doesn't exist, default to 0
+						result.quest_stage = 0;
+						result.quest_progress = 0;
+					}
+					SQLFreeHandle(SQL_HANDLE_STMT, quest_hstmt);
+				}
 			}
 		}
 	}
@@ -266,6 +291,20 @@ void DBManager::HandleSaveData(DBTask& task) {
 	}
 
 	SQLFreeHandle(SQL_HANDLE_STMT, hstmt);
+
+	// Save quest data (quest_id = 1 for Main Quest)
+	SQLHSTMT quest_hstmt = SQL_NULL_HSTMT;
+	retcode = SQLAllocHandle(SQL_HANDLE_STMT, m_hdbc, &quest_hstmt);
+	if (retcode == SQL_SUCCESS) {
+		std::wstring quest_query = L"EXEC update_quest_data '" + w_uid + L"', 1, "
+								 + std::to_wstring(pd.quest_stage) + L", "
+								 + std::to_wstring(pd.quest_progress);
+		retcode = SQLExecDirect(quest_hstmt, (SQLWCHAR*)quest_query.c_str(), SQL_NTS);
+		if (retcode != SQL_SUCCESS && retcode != SQL_SUCCESS_WITH_INFO) {
+			ReportDBError(quest_hstmt, SQL_HANDLE_STMT, retcode);
+		}
+		SQLFreeHandle(SQL_HANDLE_STMT, quest_hstmt);
+	}
 
 	// Save inventory
 	for (const auto& pair : pd.inventory) {

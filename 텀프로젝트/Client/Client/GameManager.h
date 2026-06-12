@@ -79,6 +79,14 @@ public:
 	int trade_visual_id() const { return _tradeVisualId; }
 	void set_trade_visual_id(int val) { _tradeVisualId = val; }
 
+	// Quest Info
+	int quest_stage() const { return _questStage; }
+	void set_quest_stage(int val) { _questStage = val; }
+	int quest_progress() const { return _questProgress; }
+	void set_quest_progress(int val) { _questProgress = val; }
+	int max_quest_progress() const { return _maxQuestProgress; }
+	void set_max_quest_progress(int val) { _maxQuestProgress = val; }
+
 	std::unordered_map<int, int>& my_inventory() { return _myInventory; }
 
 	std::vector<AttackEffect>& attack_effects() { return _attackEffects; }
@@ -111,6 +119,10 @@ private:
 	bool _isTrading = false;
 	int _tradeNpcId = -1;
 	int _tradeVisualId = -1;
+	
+	int _questStage = 0;
+	int _questProgress = 0;
+	int _maxQuestProgress = 0;
 
 	std::array<uint8_t, WORLD_WIDTH* WORLD_HEIGHT> _visualMap{};
 	std::array<uint8_t, WORLD_WIDTH* WORLD_HEIGHT> _collisionMap{};

@@ -270,6 +270,24 @@ Sector sector;
 ArmorConfig g_armor_config;
 PlayerConfig g_player_config;
 
+// Quest Definitions
+struct QuestData {
+	int target_npc_type;
+	int required_count;
+};
+
+QuestData get_quest_data(int stage) {
+	switch (stage) {
+		case 0: return { 5, 3 }; // Iron Golem x3
+		case 1: return { 1, 5 }; // Zombie x5
+		case 2: return { 2, 5 }; // Skeleton x5
+		case 3: return { 3, 3 }; // Creeper x3
+		case 4: return { 4, 2 }; // Enderman x2
+		case 5: return { 11, 1 }; // Ender Dragon x1
+		default: return { 0, 0 }; // Completed or invalid
+	}
+}
+
 std::vector<uint8_t> g_server_collision;
 
 bool is_passable(int x, int y) {
@@ -312,6 +330,10 @@ public:
 	// Inventory
 	int _gold = 0;
 	std::unordered_map<int, int> inventory; // item_id -> count
+
+	// Quest
+	int _quest_stage = 0;
+	int _quest_progress = 0;
 
 	std::chrono::time_point<std::chrono::system_clock> last_move_timestamp_;
 	std::chrono::time_point<std::chrono::system_clock> last_attack_time_;
@@ -601,6 +623,8 @@ public:
 		pd.legs_tier = player_->_legs_tier;
 		pd.boots_tier = player_->_boots_tier;
 		pd.weapon_tier = static_cast<int>(player_->_weapon_tier);
+		pd.quest_stage = player_->_quest_stage;
+		pd.quest_progress = player_->_quest_progress;
 		pd.inventory = player_->inventory;
 		strncpy_s(pd.user_id, sizeof(pd.user_id), userId_, sizeof(pd.user_id) - 1);
 		
@@ -616,6 +640,19 @@ public:
 		ack_packet.success = false;
 		strcpy_s(ack_packet.message, "Login failed.");
 		do_send(ack_packet.size, reinterpret_cast<char*>(&ack_packet));
+	}
+
+	void send_quest_info() {
+
+		S2C_QuestInfo pkt;
+		pkt.size = sizeof(pkt);
+		pkt.type = S2C_QUEST_INFO;
+		pkt.quest_stage = player_->_quest_stage;
+		pkt.quest_progress = player_->_quest_progress;
+
+		QuestData qd = get_quest_data(pkt.quest_stage);
+		pkt.max_progress = qd.required_count;
+		do_send(pkt.size, reinterpret_cast<char*>(&pkt));
 	}
 };
 
@@ -1451,6 +1488,35 @@ bool SESSION::proccess_packet(unsigned char* buff)
 						// Death
 						npc->is_active = false;
 						
+						// Quest Check
+						QuestData qd = get_quest_data(player_->_quest_stage);
+						if (qd.target_npc_type != 0 && qd.target_npc_type == npc->_npcType) {
+							if (player_->_quest_progress < qd.required_count) {
+								player_->_quest_progress++;
+								send_quest_info();
+								
+								S2C_ChatMessage msg_pkt;
+								msg_pkt.size = sizeof(msg_pkt);
+								msg_pkt.type = S2C_CHAT_MESSAGE;
+								msg_pkt.object_id = 0; // System
+								
+								std::string m_name = "Monster";
+								if (npc->_npcType == 1) m_name = "Zombie";
+								else if (npc->_npcType == 2) m_name = "Skeleton";
+								else if (npc->_npcType == 3) m_name = "Creeper";
+								else if (npc->_npcType == 4) m_name = "Enderman";
+								else if (npc->_npcType == 5) m_name = "Iron Golem";
+								else if (npc->_npcType == 11) m_name = "Ender Dragon";
+
+								std::string msg = "[System] " + m_name + " Killed! (" + std::to_string(player_->_quest_progress) + "/" + std::to_string(qd.required_count) + ")";
+								if (player_->_quest_progress >= qd.required_count) {
+									msg += " - Return to Quest NPC!";
+								}
+								strncpy_s(msg_pkt.message, msg.c_str(), sizeof(msg_pkt.message));
+								clients[id_].load()->do_send(msg_pkt.size, reinterpret_cast<char*>(&msg_pkt));
+							}
+						}
+
 						// Reward
 						int acquired_gold = 0;
 						if (npc->_dropItem > 0) {
@@ -1634,12 +1700,37 @@ bool SESSION::proccess_packet(unsigned char* buff)
 		}
 
 		if (closest_npc_id != -1) {
-			S2C_OpenTradeUI trade_pkt;
-			trade_pkt.size = sizeof(trade_pkt);
-			trade_pkt.type = PACKET_TYPE::S2C_OPEN_TRADE_UI;
-			trade_pkt.npc_id = closest_npc_id;
-			trade_pkt.visual_id = npc_visual_id;
-			do_send(trade_pkt.size, reinterpret_cast<char*>(&trade_pkt));
+			if (npc_visual_id == 10) {
+				// Quest NPC logic
+				QuestData qd = get_quest_data(player_->_quest_stage);
+				S2C_ChatMessage msg_pkt;
+				msg_pkt.size = sizeof(msg_pkt);
+				msg_pkt.type = S2C_CHAT_MESSAGE;
+				msg_pkt.object_id = closest_npc_id;
+
+				if (qd.target_npc_type == 0) {
+					std::string msg = "[퀘스트 NPC] 모든 임무를 완수했군. 자네가 최고야!";
+					strncpy_s(msg_pkt.message, msg.c_str(), sizeof(msg_pkt.message));
+				} else if (player_->_quest_progress >= qd.required_count) {
+					player_->_quest_stage++;
+					player_->_quest_progress = 0;
+					send_quest_info();
+					
+					std::string msg = "[퀘스트 NPC] 훌륭해! 다음 목표를 향해 가보라고!";
+					strncpy_s(msg_pkt.message, msg.c_str(), sizeof(msg_pkt.message));
+				} else {
+					std::string msg = "[퀘스트 NPC] 아직 목표를 다 채우지 못했군. 서둘러!";
+					strncpy_s(msg_pkt.message, msg.c_str(), sizeof(msg_pkt.message));
+				}
+				do_send(msg_pkt.size, reinterpret_cast<char*>(&msg_pkt));
+			} else {
+				S2C_OpenTradeUI trade_pkt;
+				trade_pkt.size = sizeof(trade_pkt);
+				trade_pkt.type = PACKET_TYPE::S2C_OPEN_TRADE_UI;
+				trade_pkt.npc_id = closest_npc_id;
+				trade_pkt.visual_id = npc_visual_id;
+				do_send(trade_pkt.size, reinterpret_cast<char*>(&trade_pkt));
+			}
 		}
 		break;
 	}
@@ -1899,9 +1990,9 @@ void SESSION::send_already_spawn_players()
 					add_pkt.exp       = npc->_exp;
 					add_pkt.level     = npc->_level;
 					add_pkt.head_tier = 0;
-						add_pkt.chest_tier = 0;
-						add_pkt.legs_tier = 0;
-						add_pkt.boots_tier = 0;
+					add_pkt.chest_tier = 0;
+					add_pkt.legs_tier = 0;
+					add_pkt.boots_tier = 0;
 					add_pkt.weapon_tier = 0;
 					add_pkt.dir_x = 0;
 					add_pkt.dir_y = -1;
@@ -2603,10 +2694,14 @@ void worker_thread()
 						strncpy_s(new_session->userId_, sizeof(new_session->userId_), result.user_id, sizeof(new_session->userId_) - 1);
 						strncpy_s(new_session->player_->userName_, sizeof(new_session->player_->userName_), result.user_name, MAX_NAME_LEN);
 						
+						new_session->player_->_quest_stage = result.quest_stage;
+						new_session->player_->_quest_progress = result.quest_progress;
+
 						new_session->send_login_success();
 						sector.add_object(id, new_session->player_->x_, new_session->player_->y_);
 						new_session->send_avatar_info();
 						new_session->send_inventory_sync();
+						new_session->send_quest_info();
 						new_session->send_already_spawn_players();
 						broadcast_new_player(id);
 						new_session->state_ = client_state::playing;

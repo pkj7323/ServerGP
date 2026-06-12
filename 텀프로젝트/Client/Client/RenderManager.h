@@ -61,6 +61,7 @@ public:
 		_item_images[4] = (HBITMAP)LoadImage(NULL, L"Resource/iron_ingot.bmp", IMAGE_BITMAP, 0, 0, LR_LOADFROMFILE);
 		_item_images[5] = (HBITMAP)LoadImage(NULL, L"Resource/gold_ingot.bmp", IMAGE_BITMAP, 0, 0, LR_LOADFROMFILE);
 		_item_images[6] = (HBITMAP)LoadImage(NULL, L"Resource/diamond.bmp", IMAGE_BITMAP, 0, 0, LR_LOADFROMFILE);
+		_item_images[9] = (HBITMAP)LoadImage(NULL, L"Resource/ender_pearl.bmp", IMAGE_BITMAP, 0, 0, LR_LOADFROMFILE);
 		
 		_grass_img = (HBITMAP)LoadImage(NULL, L"Resource/grass.bmp", IMAGE_BITMAP, 0, 0, LR_LOADFROMFILE);
 		_oak_sapling_img = (HBITMAP)LoadImage(NULL, L"Resource/oak_sapling.bmp", IMAGE_BITMAP, 0, 0, LR_LOADFROMFILE);
