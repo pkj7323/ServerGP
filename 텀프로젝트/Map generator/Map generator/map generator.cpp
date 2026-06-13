@@ -1,4 +1,4 @@
-﻿#include <algorithm>
+#include <algorithm>
 #include <iostream>
 #include <vector>
 #include <fstream>
@@ -193,8 +193,20 @@ int main() {
 		for (int x = CENTER_X - TOWN_HALF; x <= CENTER_X + TOWN_HALF; x++) 
 		{
 			const int idx = y * WORLD_WIDTH + x;
-			visualData   [idx] = TILE_GRASS;
-			collisionData[idx] = COLLISION_PASSABLE;
+			
+			// End Portal Generation at (CENTER_X, CENTER_Y + 11)
+			if (y >= CENTER_Y + 10 && y <= CENTER_Y + 12 && x >= CENTER_X - 1 && x <= CENTER_X + 1) {
+				if (y == CENTER_Y + 10 || y == CENTER_Y + 12 || x == CENTER_X - 1 || x == CENTER_X + 1) {
+					visualData[idx] = 13; // TILE_END_PORTAL_FRAME
+					collisionData[idx] = COLLISION_BLOCK;
+				} else {
+					visualData[idx] = 14; // TILE_END_PORTAL
+					collisionData[idx] = COLLISION_PASSABLE;
+				}
+			} else {
+				visualData   [idx] = TILE_GRASS;
+				collisionData[idx] = COLLISION_PASSABLE;
+			}
 			spawnData    [idx] = NPC_NONE;
 		}
 	}

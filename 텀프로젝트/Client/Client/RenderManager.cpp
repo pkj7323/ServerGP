@@ -106,6 +106,9 @@ void RenderManager::Release()
 	if (_shield_img) { DeleteObject(_shield_img); _shield_img = nullptr; }
 	if (_arrow_img) { delete _arrow_img; _arrow_img = nullptr; }
 	if (_fire_img) { delete _fire_img; _fire_img = nullptr; }
+	if (_end_portal_frame_img) { DeleteObject(_end_portal_frame_img); _end_portal_frame_img = nullptr; }
+	if (_end_portal_img) { DeleteObject(_end_portal_img); _end_portal_img = nullptr; }
+	if (_end_stone_img) { DeleteObject(_end_stone_img); _end_stone_img = nullptr; }
 }
 
 void RenderManager::Render(HWND hWnd)
@@ -180,10 +183,15 @@ static auto last_time = std::chrono::steady_clock::now();
 			uint8_t tile_id = gm->get_visual_tile(world_x, world_y);
 			COLORREF color;
 			bool is_oak = false, is_spruce = false, is_cactus = false;
+			bool is_end_portal_frame = false, is_end_portal = false;
+			bool is_end_stone = false;
 			
 			if (tile_id == 10) { is_oak = true; tile_id = 1; }
 			else if (tile_id == 11) { is_spruce = true; tile_id = 6; }
 			else if (tile_id == 12) { is_cactus = true; tile_id = 4; }
+			else if (tile_id == 13) { is_end_portal_frame = true; tile_id = 1; }
+			else if (tile_id == 14) { is_end_portal = true; tile_id = 1; }
+			else if (tile_id == 15) { is_end_stone = true; tile_id = 1; }
 
 			switch (tile_id) {
 			case 0: color = RGB(65, 105, 225); break;  // WATER
@@ -197,7 +205,15 @@ static auto last_time = std::chrono::steady_clock::now();
 			default: color = RGB(47, 79, 79); break;   // 기본
 			}
 
-			if (tile_id == 1 && _grass_img) {
+			if (is_end_stone) {
+				if (_end_stone_img) {
+					DrawBmpTransparent(memDC, memDC2, _end_stone_img, rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top);
+				} else {
+					HBRUSH hBrush = CreateSolidBrush(RGB(222, 229, 168)); // End Stone fallback color
+					FillRect(memDC, &rect, hBrush);
+					DeleteObject(hBrush);
+				}
+			} else if (tile_id == 1 && _grass_img) {
 				DrawBmpTransparent(memDC, memDC2, _grass_img, rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top);
 			} else {
 				HBRUSH hBrush = CreateSolidBrush(color);
@@ -211,6 +227,10 @@ static auto last_time = std::chrono::steady_clock::now();
 				DrawBmpTransparent(memDC, memDC2, _spruce_sapling_img, rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top);
 			} else if (is_cactus && _cactus_img) {
 				DrawBmpTransparent(memDC, memDC2, _cactus_img, rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top);
+			} else if (is_end_portal_frame && _end_portal_frame_img) {
+				DrawBmpTransparent(memDC, memDC2, _end_portal_frame_img, rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top);
+			} else if (is_end_portal && _end_portal_img) {
+				DrawBmpTransparent(memDC, memDC2, _end_portal_img, rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top);
 			}
 		}
 	}
@@ -225,7 +245,9 @@ static auto last_time = std::chrono::steady_clock::now();
 		float rel_x = npc.render_x - left_x;
 		float rel_y = npc.render_y - bottom_y;
 
-		if (rel_x >= 0 && rel_x < VIEW_WIDTH && rel_y >= 0 && rel_y < VIEW_HEIGHT) {
+		bool is_boss = (npc.visual_id == 11);
+		float margin = is_boss ? 8.0f : 2.0f;
+		if (rel_x >= -margin && rel_x < VIEW_WIDTH + margin && rel_y >= -margin && rel_y < VIEW_HEIGHT + margin) {
 			float screen_y = (VIEW_HEIGHT - 1.0f - rel_y); // NPC도 Y 반전
 
 			int padX = cellWidth * 15 / 100;
@@ -235,7 +257,54 @@ static auto last_time = std::chrono::steady_clock::now();
 			int imgW = cellWidth - padX * 2;
 			int imgH = cellHeight - padY * 2;
 
-			if (npc.visual_id > 0 && npc.visual_id <= 10 && _mob_heads[npc.visual_id]) {
+			if (npc.visual_id == 11) {
+				int boss_w = cellWidth * 9;
+				int boss_h = cellHeight * 9;
+				int bx = (int)(rel_x * cellWidth) - cellWidth * 4 + padX;
+				int by = (int)(screen_y * cellHeight) - cellHeight * 4 + padY;
+
+				int eff_type = -1;
+				for (auto& eff : gm->attack_effects()) {
+					if (eff.id == id) {
+						eff_type = eff.attack_type;
+						break;
+					}
+				}
+
+				if (eff_type == 5 && _ender_dragon_full_img) { // Tail attack (Rotate)
+					float angle = (GetTickCount() % 1000) / 1000.0f * 360.0f;
+					graphics.TranslateTransform(bx + boss_w/2.0f, by + boss_h/2.0f);
+					graphics.RotateTransform(angle);
+					Gdiplus::RectF destRect(-boss_w/2.0f, -boss_h/2.0f, (float)boss_w, (float)boss_h);
+					graphics.DrawImage(_ender_dragon_full_img, destRect, 0, 0, 250.0f, 250.0f, Gdiplus::UnitPixel);
+					graphics.ResetTransform();
+				} else if (eff_type == 6 && _ender_dragon_full_img) { // Breath (Frame 64)
+					Gdiplus::RectF destRect(bx, by, boss_w, boss_h);
+					graphics.DrawImage(_ender_dragon_full_img, destRect, 0, 64 * 250.0f, 250.0f, 250.0f, Gdiplus::UnitPixel);
+				} else {
+					if (_ender_dragon_full_img) {
+						int off_y = 0;
+						if (eff_type == 0) { // Melee lunge
+							off_y = (GetTickCount() % 200 < 100) ? 10 : -10;
+						}
+						int frame = (GetTickCount() / 150) % 8; // Use first 8 frames for walking
+						Gdiplus::RectF destRect(bx, by + off_y, boss_w, boss_h);
+						graphics.DrawImage(_ender_dragon_full_img, destRect, 0, frame * 250.0f, 250.0f, 250.0f, Gdiplus::UnitPixel);
+					}
+				}
+			} else if (npc.visual_id == 12) {
+				if (_fire_img) {
+					auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+					int frame = (now_ms / 31) % 32;
+					int srcY = frame * 16;
+					for (int dy = -1; dy <= 1; dy++) {
+						for (int dx = -1; dx <= 1; dx++) {
+							Gdiplus::Rect destRect(px + dx * cellWidth, py + dy * cellHeight, imgW, imgH);
+							graphics.DrawImage(_fire_img, destRect, 0, srcY, 16, 16, Gdiplus::UnitPixel);
+						}
+					}
+				}
+			} else if (npc.visual_id > 0 && npc.visual_id <= 10 && _mob_heads[npc.visual_id]) {
 				DrawBmpTransparent(memDC, memDC2, _mob_heads[npc.visual_id], px, py, imgW, imgH);
 			} else {
 				HBRUSH hBrush = CreateSolidBrush(RGB(0, 255, 0));
@@ -256,18 +325,20 @@ static auto last_time = std::chrono::steady_clock::now();
 				graphics.DrawImage(_fire_img, destRect, 0, srcY, 16, 16, Gdiplus::UnitPixel);
 			}
 
-			// --- 이름 출력 로직 추가 (그림자 포함) ---
-			std::wstring wName(npc.name.begin(), npc.name.end());
-			Gdiplus::SolidBrush nameBrush(Gdiplus::Color(255, 255, 255, 255));
-			Gdiplus::SolidBrush shadowBrush(Gdiplus::Color(255, 0, 0, 0));
-			graphics.DrawString(wName.c_str(), -1, &font, Gdiplus::PointF((float)(px + 1), (float)(py - 19)), &shadowBrush);
-			graphics.DrawString(wName.c_str(), -1, &font, Gdiplus::PointF((float)px, (float)(py - 20)), &nameBrush);
+			// --- 이름 텍스트 추가 (그림 위) ---
+			if (npc.visual_id != 12) {
+				std::wstring wName(npc.name.begin(), npc.name.end());
+				Gdiplus::SolidBrush nameBrush(Gdiplus::Color(255, 255, 255, 255));
+				Gdiplus::SolidBrush shadowBrush(Gdiplus::Color(255, 0, 0, 0));
+				graphics.DrawString(wName.c_str(), -1, &font, Gdiplus::PointF((float)(px + 1), (float)(py - 19)), &shadowBrush);
+				graphics.DrawString(wName.c_str(), -1, &font, Gdiplus::PointF((float)px, (float)(py - 20)), &nameBrush);
 
-			// --- 체력(HP) 출력 로직 ---
-			std::wstring wHp = L"HP: " + std::to_wstring(npc.hp) + L"/" + std::to_wstring(npc.max_hp);
-			Gdiplus::SolidBrush hpBrush(Gdiplus::Color(255, 255, 100, 100)); // 연한 빨간색
-			graphics.DrawString(wHp.c_str(), -1, &font, Gdiplus::PointF((float)(px + 1), (float)(py - 34)), &shadowBrush);
-			graphics.DrawString(wHp.c_str(), -1, &font, Gdiplus::PointF((float)px, (float)(py - 35)), &hpBrush);
+				// --- 체력(HP) 바 그리기 ---
+				std::wstring wHp = L"HP: " + std::to_wstring(npc.hp) + L"/" + std::to_wstring(npc.max_hp);
+				Gdiplus::SolidBrush hpBrush(Gdiplus::Color(255, 255, 100, 100)); // 연한 빨강색
+				graphics.DrawString(wHp.c_str(), -1, &font, Gdiplus::PointF((float)(px + 1), (float)(py - 34)), &shadowBrush);
+				graphics.DrawString(wHp.c_str(), -1, &font, Gdiplus::PointF((float)px, (float)(py - 35)), &hpBrush);
+			}
 		}
 	}
 
@@ -522,7 +593,7 @@ static auto last_time = std::chrono::steady_clock::now();
 							graphics.FillRectangle(&effectBrush, px, py, cellWidth, cellHeight);
 						}
 					}
-				} else if (it->attack_type == 4) { // 1-tile projectile (Arrow)
+				} else if (it->attack_type == 4 || it->attack_type == 7) { // 1-tile projectile (Arrow or Fireball)
 					int rel_x = it->x - static_cast<int>(left_x);
 					int rel_y = it->y - static_cast<int>(bottom_y);
 					if (rel_x >= 0 && rel_x < VIEW_WIDTH && rel_y >= 0 && rel_y < VIEW_HEIGHT) {
@@ -533,8 +604,11 @@ static auto last_time = std::chrono::steady_clock::now();
 						// 1. Draw the damage cell (semi-transparent colored box)
 						graphics.FillRectangle(&effectBrush, px, py, cellWidth, cellHeight);
 						
-						// 2. Draw the arrow image
-						if (_arrow_img) {
+						// 2. Draw the projectile image
+						if (it->attack_type == 7 && _dragon_fireball_img) {
+							Gdiplus::Rect destRect(px, py, cellWidth, cellHeight);
+							graphics.DrawImage(_dragon_fireball_img, destRect);
+						} else if (it->attack_type == 4 && _arrow_img) {
 							float cx = px + cellWidth / 2.0f;
 							float cy = py + cellHeight / 2.0f;
 							float angle = 0.0f;
@@ -559,11 +633,21 @@ static auto last_time = std::chrono::steady_clock::now();
 							graphics.FillRectangle(&arrowBrush, px + offset_x, py + offset_y, arrow_size, arrow_size);
 						}
 					}
-				} else if (it->attack_type == 3) { // 5x5 explosion AoE (Creeper)
+				} else if (it->attack_type == 3 || it->attack_type == 5) { // 5x5 explosion AoE (Creeper) or Dragon Tail
 					std::vector<std::pair<int, int>> cells;
-					for (int r = -2; r <= 2; ++r) {
-						for (int c = -2; c <= 2; ++c) {
-							cells.emplace_back(it->x + c, it->y + r);
+					if (it->attack_type == 5) {
+						for (int r = -3; r <= 3; ++r) {
+							for (int c = -3; c <= 3; ++c) {
+								if (std::abs(r) + std::abs(c) <= 3) {
+									cells.emplace_back(it->x + c, it->y + r);
+								}
+							}
+						}
+					} else {
+						for (int r = -2; r <= 2; ++r) {
+							for (int c = -2; c <= 2; ++c) {
+								cells.emplace_back(it->x + c, it->y + r);
+							}
 						}
 					}
 					for(auto& cell : cells) {
@@ -988,6 +1072,35 @@ static auto last_time = std::chrono::steady_clock::now();
 			// Level Text below the bar
 			std::wstring lvStr = L"Lv. " + std::to_wstring(my_player.level);
 			graphics.DrawString(lvStr.c_str(), -1, &boldFont, Gdiplus::RectF(static_cast<float>(barX), static_cast<float>(barY + 16), static_cast<float>(barWidth), 20.0f), &formatCenter, &cyanBrush);
+		}
+
+		// Boss HP Bar
+		for (auto& [id, npc] : npcs) {
+			if (npc.visual_id == 11 && npc.hp > 0) {
+				int bossBarW = 600;
+				int bossBarH = 20;
+				int bossBarX = (width - bossBarW) / 2;
+				int bossBarY = 50;
+				
+				Gdiplus::SolidBrush bossBg(Gdiplus::Color(200, 50, 50, 50));
+				Gdiplus::SolidBrush bossFg(Gdiplus::Color(255, 150, 0, 150));
+				
+				graphics.FillRectangle(&bossBg, bossBarX, bossBarY, bossBarW, bossBarH);
+				int fillW = (int)((float)npc.hp / npc.max_hp * bossBarW);
+				graphics.FillRectangle(&bossFg, bossBarX, bossBarY, fillW, bossBarH);
+				
+				Gdiplus::Pen whitePen(Gdiplus::Color(255, 255, 255, 255), 2);
+				graphics.DrawRectangle(&whitePen, bossBarX, bossBarY, bossBarW, bossBarH);
+				
+				Gdiplus::Font bossFont(&fontFamily, 24, Gdiplus::FontStyleBold, Gdiplus::UnitPixel);
+				Gdiplus::SolidBrush purpleBrush(Gdiplus::Color(255, 200, 50, 255));
+				Gdiplus::StringFormat formatCenter;
+				formatCenter.SetAlignment(Gdiplus::StringAlignmentCenter);
+				formatCenter.SetLineAlignment(Gdiplus::StringAlignmentCenter);
+				
+				graphics.DrawString(L"Ender Dragon", -1, &bossFont, Gdiplus::RectF(static_cast<float>(bossBarX), static_cast<float>(bossBarY - 30), static_cast<float>(bossBarW), 30.0f), &formatCenter, &purpleBrush);
+				break;
+			}
 		}
 		static bool is_dead = false;
 		static std::chrono::time_point<std::chrono::steady_clock> death_time;

@@ -150,6 +150,8 @@
     <None Include="..\..\Data\player_config.lua" />
     <None Include="ai\creeper_ai.lua" />
     <None Include="ai\enderman_ai.lua" />
+    <None Include="ai\ender_dragon_ai.lua" />
+    <None Include="ai\fire_zone_ai.lua" />
     <None Include="ai\iron_golem_ai.lua" />
     <None Include="ai\skeleton_ai.lua" />
     <None Include="ai\zombie_ai.lua" />

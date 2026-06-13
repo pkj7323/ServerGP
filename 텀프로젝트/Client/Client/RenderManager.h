@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "Singleton.h"
 
@@ -62,7 +62,11 @@ public:
 		_item_images[4] = (HBITMAP)LoadImage(NULL, L"Resource/iron_ingot.bmp", IMAGE_BITMAP, 0, 0, LR_LOADFROMFILE);
 		_item_images[5] = (HBITMAP)LoadImage(NULL, L"Resource/gold_ingot.bmp", IMAGE_BITMAP, 0, 0, LR_LOADFROMFILE);
 		_item_images[6] = (HBITMAP)LoadImage(NULL, L"Resource/diamond.bmp", IMAGE_BITMAP, 0, 0, LR_LOADFROMFILE);
+		_item_images[7] = (HBITMAP)LoadImage(NULL, L"Resource/health_potion.bmp", IMAGE_BITMAP, 0, 0, LR_LOADFROMFILE);
+		_item_images[8] = (HBITMAP)LoadImage(NULL, L"Resource/potion.bmp", IMAGE_BITMAP, 0, 0, LR_LOADFROMFILE);
 		_item_images[9] = (HBITMAP)LoadImage(NULL, L"Resource/ender_pearl.bmp", IMAGE_BITMAP, 0, 0, LR_LOADFROMFILE);
+		_item_images[10] = (HBITMAP)LoadImage(NULL, L"Resource/ender_eye.bmp", IMAGE_BITMAP, 0, 0, LR_LOADFROMFILE);
+		_item_images[11] = (HBITMAP)LoadImage(NULL, L"Resource/blaze_powder.bmp", IMAGE_BITMAP, 0, 0, LR_LOADFROMFILE);
 		
 		_grass_img = (HBITMAP)LoadImage(NULL, L"Resource/grass.bmp", IMAGE_BITMAP, 0, 0, LR_LOADFROMFILE);
 		_oak_sapling_img = (HBITMAP)LoadImage(NULL, L"Resource/oak_sapling.bmp", IMAGE_BITMAP, 0, 0, LR_LOADFROMFILE);
@@ -75,6 +79,13 @@ public:
 		_shield_img = (HBITMAP)LoadImage(NULL, L"Resource/shield.bmp", IMAGE_BITMAP, 0, 0, LR_LOADFROMFILE);
 		_arrow_img = Gdiplus::Image::FromFile(L"Resource/arrow.png");
 		_fire_img = Gdiplus::Image::FromFile(L"Resource/fire_0.png");
+		_dragon_fireball_img = Gdiplus::Image::FromFile(L"Resource/dragon_fireball.png");
+		
+		_end_portal_frame_img = (HBITMAP)LoadImage(NULL, L"Resource/end_portal_frame_top.bmp", IMAGE_BITMAP, 0, 0, LR_LOADFROMFILE);
+		_end_portal_img = (HBITMAP)LoadImage(NULL, L"Resource/end_portal.bmp", IMAGE_BITMAP, 0, 0, LR_LOADFROMFILE);
+		_end_stone_img = (HBITMAP)LoadImage(NULL, L"Resource/end_stone.bmp", IMAGE_BITMAP, 0, 0, LR_LOADFROMFILE);
+
+		_ender_dragon_full_img = Gdiplus::Image::FromFile(L"Resource/Dragon-Sheet.png");
 	}
 	~RenderManager();
 	void Release() override;
@@ -116,4 +127,11 @@ private:
 	HBITMAP _shield_img;
 	Gdiplus::Image* _arrow_img;
 	Gdiplus::Image* _fire_img;
+	Gdiplus::Image* _dragon_fireball_img;
+	HBITMAP _end_portal_frame_img;
+	HBITMAP _end_portal_img;
+	HBITMAP _end_stone_img;
+
+	Gdiplus::Image* _ender_dragon_walk_img;
+	Gdiplus::Image* _ender_dragon_full_img;
 };

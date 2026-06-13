@@ -41,6 +41,9 @@ enum class NpcActionType : int {
 	RANGE_ATTACK = 3,  // 8방향 직선 5칸 공격
 	CHAT         = 4,
 	DIE          = 5,  // 즉사 (크리퍼 자폭)
+	AOE_ATTACK   = 6,  // 원형 광역 공격 (꼬리치기)
+	BREATH_ATTACK= 7,  // 파이어볼 투사체 발사
+	ZONE_DAMAGE  = 8,  // 장판 틱 대미지
 };
 
 struct NpcAction {

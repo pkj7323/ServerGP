@@ -58,7 +58,7 @@ NPC_TYPES = {
         exp        = 300,
         attack     = 30,
         visual_id  = 4,
-        drop_item  = 6, -- Diamond
+        drop_item  = 9, -- Ender Pearl
         drop_gold  = 20,
     },
     [5] = {
@@ -129,7 +129,7 @@ NPC_TYPES = {
         attack     = 100,
         visual_id  = 11,
         drop_item  = 9, -- Ender Pearl
-        drop_gold  = 100,
+        drop_gold  = 10000,
     },
 }
 
@@ -142,6 +142,7 @@ MERCHANT_SPAWNS = {
     { type_id = 8, x = 1005, y = 995 },
     { type_id = 9, x = 995, y = 995 },
     { type_id = 10, x = 1000, y = 1002 }, -- Quest NPC
+    { type_id = 11, x = 1000, y = 1800 }, -- Ender Dragon (Boss Stage)
 }
 
 -- =============================================================================

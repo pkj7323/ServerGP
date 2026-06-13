@@ -78,6 +78,8 @@ enum class ItemType : int {
 	HEALTH_POTION = 7,
 	MANA_POTION = 8,
 	ENDER_PEARL = 9,
+	ENDER_EYE = 10,
+	BLAZE_POWDER = 11,
 };
 
 #pragma pack(push, 1) // Ensure no padding between struct members

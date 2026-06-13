@@ -135,9 +135,11 @@ void ProcessPacket(int ci, unsigned char packet[])
 		if (p->success) {
 
 			C2S_Login l_packet;
+			memset(&l_packet, 0, sizeof(l_packet));
 
 			int temp = num_connections;
-			sprintf_s(l_packet.username, "%d", temp);
+			sprintf_s(l_packet.username, "DUMMY_%d", temp);
+			sprintf_s(l_packet.user_id,  "DUMMY_%d", temp);
 			l_packet.size = sizeof(l_packet);
 			l_packet.type = C2S_LOGIN;
 			SendPacket(ci, &l_packet);
@@ -185,8 +187,7 @@ void ProcessPacket(int ci, unsigned char packet[])
 		//SendPacket(my_id, &t_packet);
 	}
 	break;
-	default: MessageBox(hWnd, L"Unknown Packet Type", L"ERROR", 0);
-		while (true);
+	default: break; // 스트레스 테스트: 알 수 없는 패킷 무시
 	}
 }
 

@@ -161,8 +161,13 @@ inline std::vector<SpawnEntry> load_merchant_spawns_lua(const char* lua_path)
 			lua_pop(L, 1);
 
 			spawns.push_back(e);
-			std::cout << "[NpcLoader] 상인 스폰 등록: Type[" << (int)e.type_id 
-					  << "] 위치(" << e.x << ", " << e.y << ")\n";
+			if (e.type_id == 11) {
+				std::cout << "[NpcLoader] 보스 스폰 등록: Type[" << (int)e.type_id 
+						  << "] 위치(" << e.x << ", " << e.y << ")\n";
+			} else {
+				std::cout << "[NpcLoader] 상인 스폰 등록: Type[" << (int)e.type_id 
+						  << "] 위치(" << e.x << ", " << e.y << ")\n";
+			}
 		}
 		lua_pop(L, 1); // pop MERCHANT_SPAWNS[i]
 	}

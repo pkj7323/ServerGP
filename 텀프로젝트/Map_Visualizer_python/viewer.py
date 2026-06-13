@@ -20,6 +20,9 @@ TILE_COLORS = {
     10: [ 10,  80,  10], # OAK TREE   (진한 초록)
     11: [ 15,  50,  30], # SPRUCE TREE(어두운 청록)
     12: [ 50, 205,  50], # CACTUS     (라임 초록)
+    13: [  0, 100,  50], # END PORTAL FRAME (짙은 초록)
+    14: [ 20,  20,  20], # END PORTAL (거의 검정)
+    15: [222, 229, 168], # END STONE  (연두 회색)
 }
 
 # ── NPC 스폰 색상 ─────────────────────────────────────────────────────────────
@@ -144,6 +147,11 @@ def create_overlay_image(visual_bin, spawn_bin, out_path):
     img_arr[CENTER_Y - TOWN_HALF : CENTER_Y + TOWN_HALF + 1,
             CENTER_X - TOWN_HALF : CENTER_X + TOWN_HALF + 1] = [255, 255, 255]
 
+    # 보스 스테이지 표시 (빨간색 테두리 - 엔드 스톤 영역)
+    BOSS_X0, BOSS_X1 = 975, 1024
+    BOSS_Y0, BOSS_Y1 = 1775, 1824
+    img_arr[BOSS_Y0:BOSS_Y1+1, BOSS_X0:BOSS_X1+1] = [222, 229, 168]  # End Stone color
+
     img_arr = np.flipud(img_arr)
     img = Image.fromarray(img_arr, 'RGB')
     _draw_legend(img)
@@ -181,6 +189,9 @@ def _draw_legend(img: Image.Image):
         ([0,   200,   0], "Creeper"),
         ([160,   0, 255], "Enderman"),
         ([255, 200,   0], "Iron Golem"),
+        ([  0, 100,  50], "End Portal Frame"),
+        ([ 20,  20,  20], "End Portal"),
+        ([222, 229, 168], "Boss Stage (End Stone)"),
     ]
     x, y, box, gap, pad = 10, 10, 14, 4, 4
     # 배경 반투명 박스

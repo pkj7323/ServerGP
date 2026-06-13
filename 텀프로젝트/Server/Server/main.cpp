@@ -1,4 +1,4 @@
-﻿#define NOMINMAX
+#define NOMINMAX
 #include <algorithm>
 #include <iostream>
 #include <WS2tcpip.h>
@@ -31,6 +31,8 @@ enum NpcType : uint8_t {
 	NPC_CREEPER = 3,
 	NPC_ENDERMAN = 4,
 	NPC_IRON_GOLEM = 5,
+	NPC_ENDER_DRAGON = 11,
+	NPC_FIRE_ZONE = 12,
 };
 
 void error_display(const std::wstring& msg, int err_no)
@@ -49,7 +51,7 @@ void error_display(const std::wstring& msg, int err_no)
 	LocalFree(lpMsgBuf);
 }
 constexpr int BUF_SIZE = 1024;
-constexpr int VIEW_RANGE = 5;
+constexpr int VIEW_RANGE = 6;
 constexpr int SECTOR_SIZE = 10;
 constexpr int MOVE_COOL_TIME = 1000; // NPC 이동 쿨타임 (밀리초)
 constexpr int MOVE_COOL_TIME_VARIATION = 1000;
@@ -76,6 +78,7 @@ struct event_type {
 	int attack_power = 0;
 	int16_t start_x = 0;
 	int16_t start_y = 0;
+	int proj_type = 0; // 0: Arrow, 1: Fireball
 	constexpr bool operator < (const event_type& _Left) const
 	{
 		return (wakeup_time > _Left.wakeup_time);
@@ -608,14 +611,18 @@ public:
 	}
 	void send_move_packet(int mover, uint32_t timestamp);
 	void send_add_player(int player_id);
-	bool is_visible(int x, int y) {
+	bool is_visible(int x, int y, int npc_type = 0) {
+		if (npc_type == 11) return true; // NPC_ENDER_DRAGON
 		return abs(x - player_->x_) <= VIEW_RANGE && abs(y - player_->y_) <= VIEW_RANGE;
 	}
 	void send_already_spawn_players();
+	void force_teleport(int tx, int ty);
 	
 	void save_to_db()
 	{
 		if (!player_) return;
+		// 더미 클라이언트는 DB 저장 생략
+		if (strncmp(userId_, "DUMMY_", 6) == 0) return;
 		
 		DBTask task;
 		task.type = DBTaskType::SAVE_USER_DATA;
@@ -896,7 +903,7 @@ public:
 			for (int s = 0; s < steps; ++s) {
 				int nx = x_ + step_x;
 				int ny = y_ + step_y;
-				if (is_passable(nx, ny)) { x_ = nx; y_ = ny; }
+				if (_npcType == NPC_ENDER_DRAGON || is_passable(nx, ny)) { x_ = nx; y_ = ny; }
 				else break;
 			}
 			break;
@@ -991,6 +998,88 @@ public:
 			_hp = 0;
 			break;
 		}
+		case NpcActionType::AOE_ATTACK: {
+			S2C_AttackEffect eff;
+			eff.size = sizeof(eff);
+			eff.type = S2C_ATTACK_EFFECT;
+			eff.object_id = id_;
+			eff.weapon_tier = 0;
+			eff.attack_type = 5; // 5: Dragon Tail (Rotate)
+			eff.x = x_;
+			eff.y = y_;
+			eff.dir_x = 0;
+			eff.dir_y = 0;
+			for (auto pid : old_vl) {
+				if (is_npc_id(pid)) continue;
+				auto ps = clients[pid].load();
+				if (ps && ps->state_ == client_state::playing) ps->do_send(eff.size, reinterpret_cast<char*>(&eff));
+			}
+			for (auto pid : old_vl) {
+				std::shared_ptr<SESSION> s = clients[pid].load();
+				if (!s || !s->player_) continue;
+				int dist = std::abs(s->player_->x_ - x_) + std::abs(s->player_->y_ - y_);
+				if (dist <= 3) {
+					player_take_damage(s, _attack);
+				}
+			}
+			break;
+		}
+		case NpcActionType::BREATH_ATTACK: {
+			if (action.target_id < 0) break;
+			std::shared_ptr<SESSION> tgt = clients[action.target_id].load();
+			if (!tgt || !tgt->player_) break;
+			int tx = tgt->player_->x_ - x_;
+			int ty = tgt->player_->y_ - y_;
+			int abs_tx = std::abs(tx), abs_ty = std::abs(ty);
+			int dir_x = (abs_tx >= abs_ty) ? (tx > 0 ? 1 : -1) : 0;
+			int dir_y = (abs_ty > abs_tx)  ? (ty > 0 ? 1 : -1) : 0;
+			
+			event_type ev;
+			ev.obj_id = id_;
+			ev.event_id = EVENT_PROJECTILE;
+			ev.start_x = x_;
+			ev.start_y = y_;
+			ev.dir_x = dir_x;
+			ev.dir_y = dir_y;
+			ev.step = 1;
+			ev.attack_power = _attack;
+			ev.proj_type = 1; // 1: Fireball
+			ev.wakeup_time = std::chrono::system_clock::now() + std::chrono::milliseconds(200);
+			timer_queue.push(ev);
+			
+			S2C_AttackEffect eff;
+			eff.size = sizeof(eff);
+			eff.type = S2C_ATTACK_EFFECT;
+			eff.object_id = id_;
+			eff.weapon_tier = 0;
+			eff.attack_type = 6; // 6: Dragon Breath (64th frame)
+			eff.x = x_;
+			eff.y = y_;
+			eff.dir_x = dir_x;
+			eff.dir_y = dir_y;
+			for (auto pid : old_vl) {
+				if (is_npc_id(pid)) continue;
+				auto ps = clients[pid].load();
+				if (ps && ps->state_ == client_state::playing) ps->do_send(eff.size, reinterpret_cast<char*>(&eff));
+			}
+			break;
+		}
+		case NpcActionType::ZONE_DAMAGE: {
+			_hp--;
+			if (_hp <= 0) {
+				_aiState = NpcState::DEAD;
+				break;
+			}
+			for (auto pid : old_vl) {
+				std::shared_ptr<SESSION> s = clients[pid].load();
+				if (!s || !s->player_) continue;
+				int dist = std::max(std::abs(s->player_->x_ - x_), std::abs(s->player_->y_ - y_));
+				if (dist <= 1) { // 3x3 반경 도트 딜
+					player_take_damage(s, _attack);
+				}
+			}
+			break;
+		}
 		default:
 			break;
 		}
@@ -1038,7 +1127,17 @@ public:
 		}
 
 		// 7. 결과 반환: 플레이어가 주변에 있으면 action.delay_ms로 타이머 재등록, 없으면 0으로 수면
-		bool has_player_nearby = !new_vl.empty();
+		bool has_player_nearby = false;
+		int check_range = (_npcType == 11) ? VIEW_RANGE + 4 : VIEW_RANGE;
+		for (auto pid : new_vl) {
+			std::shared_ptr<SESSION> s = clients[pid].load();
+			if (s && s->state_ == client_state::playing) {
+				if (std::abs(s->player_->x_ - x_) <= check_range && std::abs(s->player_->y_ - y_) <= check_range) {
+					has_player_nearby = true;
+					break;
+				}
+			}
+		}
 		return has_player_nearby ? action.delay_ms : 0;
 	}
 
@@ -1115,8 +1214,40 @@ bool SESSION::proccess_packet(unsigned char* buff)
 	case PACKET_TYPE::C2S_LOGIN:
 	{
 		C2S_Login* p = reinterpret_cast<C2S_Login*>(buff);
-		strncpy_s(userId_, sizeof(userId_), p->user_id, sizeof(userId_) - 1); // Store user_id from packet
-		
+		strncpy_s(userId_, sizeof(userId_), p->user_id, sizeof(userId_) - 1);
+
+		// ── 더미 클라이언트 (스트레스 테스트): DB 검증 없이 즉시 스폰 ──
+		if (strncmp(p->user_id, "DUMMY_", 6) == 0) {
+			strncpy_s(player_->userName_, sizeof(player_->userName_), p->user_id, sizeof(player_->userName_) - 1);
+			player_->_hp     = 100;
+			player_->_maxHp  = 100;
+			player_->_level  = 1;
+			player_->_exp    = 0;
+			player_->_gold   = 0;
+			player_->_weapon_tier = 1;
+
+			// 통과 가능한 랜덤 스폰 위치 탐색
+			int rx, ry;
+			do {
+				rx = 100 + rand() % 1700; // 맵 가장자리 100칸 제외
+				ry = 100 + rand() % 1700;
+			} while (!is_passable(rx, ry));
+			player_->x_ = static_cast<int16_t>(rx);
+			player_->y_ = static_cast<int16_t>(ry);
+			player_->initial_x_ = player_->x_;
+			player_->initial_y_ = player_->y_;
+
+			send_login_success();
+			sector.add_object(id_, player_->x_, player_->y_);
+			send_avatar_info();
+			send_already_spawn_players();
+			broadcast_new_player(id_);
+			state_ = client_state::playing;
+			std::cout << "[DUMMY] " << p->user_id << " spawned at (" << rx << ", " << ry << ")\n";
+			break;
+		}
+
+		// ── 일반 유저: DB 인증 ──
 		state_ = client_state::connected;
 		DBTask login_task;
 		login_task.session_id = id_;
@@ -1164,6 +1295,12 @@ bool SESSION::proccess_packet(unsigned char* buff)
 
 		if (is_passable(new_x, new_y))
 		{
+			// Boss Room Teleport
+			if (player_->_quest_stage == 5 && new_x >= 999 && new_x <= 1001 && new_y >= 1010 && new_y <= 1012) {
+				force_teleport(1000, 1800);
+				break;
+			}
+			
 			player_->x_ = new_x;
 			player_->y_ = new_y;
 		}
@@ -1194,7 +1331,7 @@ bool SESSION::proccess_packet(unsigned char* buff)
 			// NPCs check
 			if (is_npc_id(id)) {
 				auto npc = npcs[id].load();
-				if (is_visible(npc->x_, npc->y_)) {
+				if (is_visible(npc->x_, npc->y_, npc->_npcType)) {
 					new_visible_players.insert(id);
 				}
 				continue;
@@ -1232,9 +1369,9 @@ bool SESSION::proccess_packet(unsigned char* buff)
 					add_pkt.exp       = npc->_exp;
 					add_pkt.level     = npc->_level;
 					add_pkt.head_tier = 0;
-						add_pkt.chest_tier = 0;
-						add_pkt.legs_tier = 0;
-						add_pkt.boots_tier = 0; // NPCs don't have armor tier
+					add_pkt.chest_tier = 0;
+					add_pkt.legs_tier = 0;
+					add_pkt.boots_tier = 0; // NPCs don't have armor tier
 					add_pkt.weapon_tier = 0;
 					add_pkt.dir_x = 0;
 					add_pkt.dir_y = -1;
@@ -1404,8 +1541,6 @@ bool SESSION::proccess_packet(unsigned char* buff)
 	{
 		C2S_LearnSkill* p = reinterpret_cast<C2S_LearnSkill*>(buff);
 		int stype = p->skill_type;
-		// HACK: 테스트를 위해 스킬 포인트가 없어도 스킬을 배울 수 있게 임시 지급
-		if (player_->_unspent_sp <= 0) player_->_unspent_sp = 10; 
 		if (player_->_unspent_sp > 0) {
 			int mask = 1 << stype;
 			if ((player_->_skills_mask & mask) == 0) {
@@ -1517,11 +1652,19 @@ bool SESSION::proccess_packet(unsigned char* buff)
 				auto npc = npcs[oid].load();
 				if (!npc || !npc->is_active) continue;
 				if (npc->_aiState == NpcState::MERCHANT) continue; // Prevent hitting merchants
+				if (npc->_npcType == NPC_FIRE_ZONE) continue; // Prevent hitting fire zones
 				bool hit = false;
 				for (auto& cell : attack_cells) {
-					if (npc->x_ == cell.first && npc->y_ == cell.second) {
-						hit = true;
-						break;
+					if (npc->_npcType == NPC_ENDER_DRAGON) {
+						if (std::abs(npc->x_ - cell.first) <= 4 && std::abs(npc->y_ - cell.second) <= 4) {
+							hit = true;
+							break;
+						}
+					} else {
+						if (npc->x_ == cell.first && npc->y_ == cell.second) {
+							hit = true;
+							break;
+						}
 					}
 				}
 				if (hit) {
@@ -1657,6 +1800,9 @@ bool SESSION::proccess_packet(unsigned char* buff)
 								std::string msg = "[System] " + m_name + " Killed! (" + std::to_string(player_->_quest_progress) + "/" + std::to_string(qd.required_count) + ")";
 								if (player_->_quest_progress >= qd.required_count) {
 									msg += " - Return to Quest NPC!";
+									if (npc->_npcType == 11) {
+										force_teleport(1000, 1000);
+									}
 								}
 								strncpy_s(msg_pkt.message, msg.c_str(), sizeof(msg_pkt.message));
 								clients[id_].load()->do_send(msg_pkt.size, reinterpret_cast<char*>(&msg_pkt));
@@ -1685,9 +1831,9 @@ bool SESSION::proccess_packet(unsigned char* buff)
 						stat.exp        = player_->_exp;
 						stat.level      = player_->_level;
 						stat.head_tier = player_->_head_tier;
-					stat.chest_tier = player_->_chest_tier;
-					stat.legs_tier = player_->_legs_tier;
-					stat.boots_tier = player_->_boots_tier;
+						stat.chest_tier = player_->_chest_tier;
+						stat.legs_tier = player_->_legs_tier;
+						stat.boots_tier = player_->_boots_tier;
 						stat.weapon_tier = player_->_weapon_tier;
 						do_send(stat.size, reinterpret_cast<char*>(&stat));
 
@@ -1729,7 +1875,23 @@ bool SESSION::proccess_packet(unsigned char* buff)
 							chat_pkt.type = S2C_CHAT_MESSAGE;
 							chat_pkt.object_id = -1; // System message (Unknown)
 							std::string msg = "아이템 획득: ";
-							if (npc->_dropItem > 0) msg += "Item_ID[" + std::to_string(npc->_dropItem) + "] 1개 ";
+							if (npc->_dropItem > 0) {
+								std::string item_name = "알 수 없는 아이템";
+								switch (npc->_dropItem) {
+									case 1: item_name = "썩은 고기"; break;
+									case 2: item_name = "뼈다귀"; break;
+									case 3: item_name = "화약"; break;
+									case 4: item_name = "철 주괴"; break;
+									case 5: item_name = "금 주괴"; break;
+									case 6: item_name = "다이아몬드"; break;
+									case 7: item_name = "체력 포션"; break;
+									case 8: item_name = "마나 포션"; break;
+									case 9: item_name = "엔더 진주"; break;
+									case 10: item_name = "엔더의 눈"; break;
+									case 11: item_name = "블레이즈 가루"; break;
+								}
+								msg += item_name + " 1개 ";
+							}
 							if (acquired_gold > 0) msg += "Gold " + std::to_string(acquired_gold);
 							strncpy_s(chat_pkt.message, msg.c_str(), sizeof(chat_pkt.message));
 							do_send(chat_pkt.size, reinterpret_cast<char*>(&chat_pkt));
@@ -1822,7 +1984,6 @@ bool SESSION::proccess_packet(unsigned char* buff)
 		}
 		break;
 	}
-
 	case PACKET_TYPE::C2S_INTERACT_NPC:
 	{
 		// Find closest NPC
@@ -1859,12 +2020,72 @@ bool SESSION::proccess_packet(unsigned char* buff)
 					std::string msg = "[퀘스트 NPC] 모든 임무를 완수했군. 자네가 최고야!";
 					strncpy_s(msg_pkt.message, msg.c_str(), sizeof(msg_pkt.message));
 				} else if (player_->_quest_progress >= qd.required_count) {
-					player_->_quest_stage++;
-					player_->_quest_progress = 0;
-					send_quest_info();
-					
-					std::string msg = "[퀘스트 NPC] 훌륭해! 다음 목표를 향해 가보라고!";
-					strncpy_s(msg_pkt.message, msg.c_str(), sizeof(msg_pkt.message));
+					if (player_->_quest_stage == 5) {
+						player_->_quest_stage = 1;
+						player_->_quest_progress = 0;
+						send_quest_info();
+						
+						bool leveled_up = player_->gain_exp(50000);
+						player_->_gold += 50000;
+						
+						S2C_StatusChange stat_pkt;
+						stat_pkt.size = sizeof(stat_pkt);
+						stat_pkt.type = S2C_STATUS_CHANGE;
+						stat_pkt.object_id = id_;
+						stat_pkt.hp = player_->_hp;
+						stat_pkt.max_hp = player_->_maxHp;
+						stat_pkt.exp = player_->_exp;
+						stat_pkt.level = player_->_level;
+						stat_pkt.head_tier = player_->_head_tier;
+						stat_pkt.chest_tier = player_->_chest_tier;
+						stat_pkt.legs_tier = player_->_legs_tier;
+						stat_pkt.boots_tier = player_->_boots_tier;
+						stat_pkt.weapon_tier = player_->_weapon_tier;
+						do_send(stat_pkt.size, reinterpret_cast<char*>(&stat_pkt));
+						
+						send_inventory_sync();
+						if (leveled_up) {
+							send_skill_sync();
+							S2C_ChatMessage lvl_msg;
+							lvl_msg.size = sizeof(lvl_msg);
+							lvl_msg.type = S2C_CHAT_MESSAGE;
+							lvl_msg.object_id = 0;
+							std::string lm = "[System] Level Up! You reached level " + std::to_string(player_->_level) + "!";
+							strncpy_s(lvl_msg.message, lm.c_str(), sizeof(lvl_msg.message));
+							do_send(lvl_msg.size, reinterpret_cast<char*>(&lvl_msg));
+							
+							S2C_StatusChange stat_change;
+							stat_change.size = sizeof(stat_change);
+							stat_change.type = S2C_STATUS_CHANGE;
+							stat_change.object_id = id_;
+							stat_change.hp = player_->_hp;
+							stat_change.max_hp = player_->_maxHp;
+							stat_change.exp = player_->_exp;
+							stat_change.level = player_->_level;
+							stat_change.head_tier = player_->_head_tier;
+							stat_change.chest_tier = player_->_chest_tier;
+							stat_change.legs_tier = player_->_legs_tier;
+							stat_change.boots_tier = player_->_boots_tier;
+							stat_change.weapon_tier = player_->_weapon_tier;
+							
+							auto nearby = sector.get_objects_nearby_sector(player_->x_, player_->y_);
+							for (auto pid : nearby) {
+								if (is_npc_id(pid) || pid == id_) continue;
+								auto s = clients[pid].load();
+								if (s && s->state_ == client_state::playing) s->do_send(stat_change.size, reinterpret_cast<char*>(&stat_change));
+							}
+						}
+						
+						std::string msg = "[퀘스트 NPC] 세상을 구했군! 대량의 보상을 주지! 처음부터 다시 시작할까?";
+						strncpy_s(msg_pkt.message, msg.c_str(), sizeof(msg_pkt.message));
+					} else {
+						player_->_quest_stage++;
+						player_->_quest_progress = 0;
+						send_quest_info();
+						
+						std::string msg = "[퀘스트 NPC] 훌륭해! 다음 목표를 주지!";
+						strncpy_s(msg_pkt.message, msg.c_str(), sizeof(msg_pkt.message));
+					}
 				} else {
 					std::string msg = "[퀘스트 NPC] 아직 목표를 다 채우지 못했군. 서둘러!";
 					strncpy_s(msg_pkt.message, msg.c_str(), sizeof(msg_pkt.message));
@@ -2079,6 +2300,104 @@ void SESSION::send_move_packet(int move_player_id, uint32_t timestamp)
 	move_packet.move_time = timestamp;
 	do_send(move_packet.size, reinterpret_cast<char*>(&move_packet));
 }
+
+void SESSION::force_teleport(int tx, int ty) {
+	int old_x = player_->x_;
+	int old_y = player_->y_;
+	player_->x_ = tx;
+	player_->y_ = ty;
+	sector.move_object(id_, old_x, old_y, tx, ty);
+
+	S2C_UpdatePosition tp_pkt;
+	tp_pkt.size = sizeof(tp_pkt);
+	tp_pkt.type = S2C_UPDATE_POSITION;
+	tp_pkt.x = tx;
+	tp_pkt.y = ty;
+	do_send(tp_pkt.size, reinterpret_cast<char*>(&tp_pkt));
+
+	auto old_view = visible_players;
+	std::unordered_set<int> new_visible_players;
+	auto object_ids_nearby = sector.get_objects_nearby_sector(tx, ty);
+	
+	for (auto& id : object_ids_nearby) {
+		if (id == id_) continue;
+		if (is_npc_id(id)) {
+			auto npc = npcs[id].load();
+			if (is_visible(npc->x_, npc->y_, npc->_npcType)) new_visible_players.insert(id);
+		} else {
+			auto it = clients.find(id);
+			if (it == clients.end()) continue;
+			std::shared_ptr<SESSION> s = it->second.load();
+			if (s && s->state_ == client_state::playing) {
+				if (s->is_visible(tx, ty)) new_visible_players.insert(id);
+			}
+		}
+	}
+
+	for (auto& oid : new_visible_players) {
+		if (!old_view.contains(oid)) {
+			if (is_npc_id(oid)) {
+				auto npc = npcs[oid].load();
+				S2C_AddObject add_pkt;
+				add_pkt.size = sizeof(add_pkt);
+				add_pkt.type = PACKET_TYPE::S2C_ADD_OBJECT;
+				add_pkt.object_id = oid;
+				add_pkt.x = npc->x_;
+				add_pkt.y = npc->y_;
+				strncpy_s(add_pkt.obj_name, npc->userName_, sizeof(add_pkt.obj_name));
+				add_pkt.visual_id = npc->_visualId;
+				add_pkt.hp        = npc->_hp;
+				add_pkt.max_hp    = npc->_maxHp;
+				add_pkt.exp       = npc->_exp;
+				add_pkt.level     = npc->_level;
+				add_pkt.head_tier = 0; add_pkt.chest_tier = 0; add_pkt.legs_tier = 0;
+				add_pkt.boots_tier = 0; add_pkt.weapon_tier = 0;
+				add_pkt.npc_state = static_cast<char>(npc->_aiState);
+				do_send(add_pkt.size, reinterpret_cast<char*>(&add_pkt));
+				npc->wake_up();
+			} else {
+				std::shared_ptr<SESSION> s = clients[oid].load();
+				if (s && s->state_ == client_state::playing) {
+					s->send_add_player(id_);
+					send_add_player(oid);
+				}
+			}
+		}
+	}
+
+	for (auto& oid : old_view) {
+		if (!new_visible_players.contains(oid)) {
+			S2C_RemoveObject rm_pkt;
+			rm_pkt.size = sizeof(rm_pkt);
+			rm_pkt.type = S2C_REMOVE_OBJECT;
+			rm_pkt.object_id = oid;
+			do_send(rm_pkt.size, reinterpret_cast<char*>(&rm_pkt));
+			
+			if (!is_npc_id(oid)) {
+				auto it = clients.find(oid);
+				if (it != clients.end()) {
+					std::shared_ptr<SESSION> s = it->second.load();
+					if (s && s->state_ == client_state::playing) {
+						s->visible_players_mutex.lock();
+						s->visible_players.erase(id_);
+						s->visible_players_mutex.unlock();
+						
+						S2C_RemoveObject rm_me;
+						rm_me.size = sizeof(rm_me);
+						rm_me.type = S2C_REMOVE_OBJECT;
+						rm_me.object_id = id_;
+						s->do_send(rm_me.size, reinterpret_cast<char*>(&rm_me));
+					}
+				}
+			}
+		}
+	}
+
+	visible_players_mutex.lock();
+	visible_players = new_visible_players;
+	visible_players_mutex.unlock();
+}
+
 void SESSION::send_add_player(int player_id)
 {
 	std::shared_ptr<SESSION> session = clients[player_id].load();
@@ -2123,7 +2442,7 @@ void SESSION::send_already_spawn_players()
 		{
 			if (is_npc_id(id)) {
 				auto npc = npcs[id].load();
-				if (is_visible(npc->x_, npc->y_)) {
+				if (is_visible(npc->x_, npc->y_, npc->_npcType)) {
 					S2C_AddObject add_pkt;
 					add_pkt.size = sizeof(add_pkt);
 					add_pkt.type = PACKET_TYPE::S2C_ADD_OBJECT;
@@ -2251,6 +2570,8 @@ void npc_initialize()
 	NpcAiManager::register_script(3, ai_dir + "creeper_ai.lua");
 	NpcAiManager::register_script(4, ai_dir + "enderman_ai.lua");
 	NpcAiManager::register_script(5, ai_dir + "iron_golem_ai.lua");
+	NpcAiManager::register_script(11, ai_dir + "ender_dragon_ai.lua");
+	NpcAiManager::register_script(12, ai_dir + "fire_zone_ai.lua");
 	std::cout << "[Server] NPC AI scripts registered." << std::endl;
 
 	// ── Step 1.5. 충돌 맵 로드 ─────────────────────────────
@@ -2296,8 +2617,10 @@ void npc_initialize()
 		npc->_attack   = m.attack;
 		npc->_dropItem = m.drop_item;
 		npc->_dropGold = m.drop_gold;
-		if (entry.type_id >= 6) {
+		if (entry.type_id >= 6 && entry.type_id <= 10) {
 			npc->_aiState = NpcState::MERCHANT;
+		} else {
+			npc->_aiState = NpcState::IDLE;
 		}
 		strncpy_s(npc->userName_, m.name.c_str(), sizeof(npc->userName_) - 1);
 
@@ -2525,13 +2848,15 @@ void worker_thread()
 						s->do_send(rm_pkt.size, reinterpret_cast<char*>(&rm_pkt));
 				}
 				sector.remove_object(npc->id_, npc->x_, npc->y_);
-				// 5초 뒤 리스폰
-				event_type ev;
-				ev.obj_id = id;
-				ev.wakeup_time = std::chrono::system_clock::now() + std::chrono::seconds(5);
-				ev.event_id = EVENT_RESPAWN;
-				ev.target_id = -1;
-				timer_queue.push(ev);
+				if (npc->_npcType != NPC_FIRE_ZONE) {
+					// 5초 뒤 리스폰
+					event_type ev;
+					ev.obj_id = id;
+					ev.wakeup_time = std::chrono::system_clock::now() + std::chrono::seconds(5);
+					ev.event_id = EVENT_RESPAWN;
+					ev.target_id = -1;
+					timer_queue.push(ev);
+				}
 				break;
 			}
 
@@ -2593,7 +2918,7 @@ void worker_thread()
 						if (!is_npc_id(pid)) {
 							std::shared_ptr<SESSION> s = clients[pid].load();
 							if (s && s->state_ == client_state::playing) {
-								if (s->is_visible(npc->x_, npc->y_)) {
+								if (s->is_visible(npc->x_, npc->y_, npc->_npcType)) {
 									s->visible_players_mutex.lock();
 									s->visible_players.insert(npc->id_);
 									s->visible_players_mutex.unlock();
@@ -2755,7 +3080,7 @@ void worker_thread()
 
 					if (is_npc_id(oid)) {
 						auto npc = npcs[oid].load();
-						if (s->is_visible(npc->x_, npc->y_)) {
+						if (s->is_visible(npc->x_, npc->y_, npc->_npcType)) {
 							new_visible_players.insert(oid);
 						}
 						continue;
@@ -2857,12 +3182,14 @@ void worker_thread()
 			int cx = ev.start_x + ev.dir_x * ev.step;
 			int cy = ev.start_y + ev.dir_y * ev.step;
 			
+			bool hit_wall = !is_passable(cx, cy);
+
 			S2C_AttackEffect eff;
 			eff.size = sizeof(eff);
 			eff.type = S2C_ATTACK_EFFECT;
 			eff.object_id = ev.obj_id;
 			eff.weapon_tier = 0;
-			eff.attack_type = 4; // 1-tile projectile effect
+			eff.attack_type = (ev.proj_type == 1) ? 7 : 4; // 7 for fireball, 4 for arrow
 			eff.x = cx;
 			eff.y = cy;
 			eff.dir_x = ev.dir_x;
@@ -2885,9 +3212,40 @@ void worker_thread()
 				}
 			}
 
-			if (!hit_player && ev.step < 5) {
+			int max_steps = (ev.proj_type == 1) ? 8 : 5;
+			bool exploded = false;
+
+			if (hit_player || hit_wall || ev.step >= max_steps) {
+				exploded = true;
+			}
+
+			if (exploded) {
+				if (ev.proj_type == 1) { // Fireball 폭발 시 불 장판 생성
+					int fire_zone_id = make_npc_id(npc_index++);
+					auto npc = std::make_shared<NPC>();
+					npc->id_ = fire_zone_id;
+					npc->x_ = cx;
+					npc->y_ = cy;
+					npc->_aiState = NpcState::IDLE;
+					npc->_hp = 3;
+					npc->_maxHp = 3;
+					npc->_visualId = 12; // 12: NPC_FIRE_ZONE
+					npc->_npcType = NPC_FIRE_ZONE; // 12번 타입 (fire_zone_ai.lua 사용)
+					npc->_attack = std::max(1, ev.attack_power / 2); // 도트 딜
+					strncpy_s(npc->userName_, "FireZone", sizeof(npc->userName_) - 1);
+					
+					npcs[fire_zone_id] = npc;
+					sector.add_object(fire_zone_id, cx, cy);
+
+					event_type move_ev;
+					move_ev.obj_id = fire_zone_id;
+					move_ev.event_id = EVENT_MOVE;
+					move_ev.wakeup_time = std::chrono::system_clock::now() + std::chrono::milliseconds(1000);
+					timer_queue.push(move_ev);
+				}
+			} else {
 				ev.step++;
-				ev.wakeup_time = std::chrono::system_clock::now() + std::chrono::milliseconds(200);
+				ev.wakeup_time = std::chrono::system_clock::now() + std::chrono::milliseconds((ev.proj_type == 1) ? 100 : 200);
 				timer_queue.push(ev);
 			}
 			break;

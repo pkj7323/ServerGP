@@ -89,5 +89,11 @@
     <None Include="ai\zombie_ai.lua">
       <Filter>NPC AI</Filter>
     </None>
+    <None Include="ai\ender_dragon_ai.lua">
+      <Filter>NPC AI</Filter>
+    </None>
+    <None Include="ai\fire_zone_ai.lua">
+      <Filter>NPC AI</Filter>
+    </None>
   </ItemGroup>
 </Project>
