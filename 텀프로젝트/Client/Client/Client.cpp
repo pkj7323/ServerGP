@@ -1,6 +1,5 @@
-﻿#include <algorithm>
-
 #include "pch.h"
+
 #include "GameManager.h"
 #include "NetworkManager.h"
 #include "RenderManager.h"
@@ -102,8 +101,28 @@ LRESULT CALLBACK window_proc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lPar
 			return 0; // Ignore other keys while trading
 		}
 
+		if (gm->show_skill_tree()) {
+			if (wParam == VK_ESCAPE) {
+				gm->toggle_skill_tree();
+				return 0;
+			}
+			if (wParam >= '1' && wParam <= '4') {
+				C2S_LearnSkill p;
+				p.size = sizeof(p);
+				p.type = C2S_LEARN_SKILL;
+				p.skill_type = static_cast<char>(wParam - '1'); // Map '1'-'4' to 0-3
+				NetworkManager::Instance()->send_packet(&p);
+				return 0;
+			}
+			return 0; // Ignore other keys while skill tree is open
+		}
+
 		if (wParam == 'E') {
 			gm->toggle_inventory();
+			return 0;
+		}
+		if (wParam == 'K') {
+			gm->toggle_skill_tree();
 			return 0;
 		}
 		if (wParam == 'F') {
@@ -113,7 +132,7 @@ LRESULT CALLBACK window_proc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lPar
 			NetworkManager::Instance()->send_packet(&p);
 			return 0;
 		}
-		if (wParam == '1' || wParam == '2') {
+		if (wParam == '1' || wParam == '2' || wParam == '3') {
 			auto now = std::chrono::steady_clock::now();
 			if (wParam == '1' && std::chrono::duration_cast<std::chrono::milliseconds>(now - gm->last_potion_use()).count() >= 5000) {
 				if (gm->my_inventory()[static_cast<int>(ItemType::HEALTH_POTION)] > 0) {
@@ -124,17 +143,24 @@ LRESULT CALLBACK window_proc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lPar
 					p.slot_id = 1;
 					NetworkManager::Instance()->send_packet(&p);
 				}
-			} else if (wParam == '2' && std::chrono::duration_cast<std::chrono::milliseconds>(now - gm->last_skill_use()).count() >= 15000) {
+			} else if (wParam == '2' && std::chrono::duration_cast<std::chrono::milliseconds>(now - gm->last_skill_use()).count() >= 10000) {
 				gm->start_skill_cooldown();
 				C2S_UseQuickSlot p;
 				p.size = sizeof(p);
 				p.type = C2S_USE_QUICKSLOT;
 				p.slot_id = 2;
 				NetworkManager::Instance()->send_packet(&p);
+			} else if (wParam == '3' && std::chrono::duration_cast<std::chrono::milliseconds>(now - gm->last_ender_pearl_use()).count() >= 10000) {
+				gm->start_ender_pearl_cooldown();
+				C2S_UseQuickSlot p;
+				p.size = sizeof(p);
+				p.type = C2S_USE_QUICKSLOT;
+				p.slot_id = 3;
+				NetworkManager::Instance()->send_packet(&p);
 			}
 			return 0;
 		}
-		if (wParam >= '3' && wParam <= '8') {
+		if (wParam >= '4' && wParam <= '8') {
 			C2S_TestWeapon p;
 			p.size = sizeof(p);
 			p.type = C2S_TEST_WEAPON;
@@ -222,6 +248,7 @@ int WINAPI WinMain(HINSTANCE hI, HINSTANCE hP, LPSTR lp, int nS) {
 
 	if (nm->Connect(server_ip, PORT) == false) {
 		std::cout << "Connect failed\n";
+		system("pause");
 		return 0;
 	}
 

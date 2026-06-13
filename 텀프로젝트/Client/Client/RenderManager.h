@@ -52,6 +52,7 @@ public:
 		_mob_heads[7] = (HBITMAP)LoadImage(NULL, L"Resource/armorer_head.bmp", IMAGE_BITMAP, 0, 0, LR_LOADFROMFILE);
 		_mob_heads[8] = (HBITMAP)LoadImage(NULL, L"Resource/weaponsmith_head.bmp", IMAGE_BITMAP, 0, 0, LR_LOADFROMFILE);
 		_mob_heads[9] = (HBITMAP)LoadImage(NULL, L"Resource/librarian_head.bmp", IMAGE_BITMAP, 0, 0, LR_LOADFROMFILE);
+		_mob_heads[10] = (HBITMAP)LoadImage(NULL, L"Resource/villager_head.bmp", IMAGE_BITMAP, 0, 0, LR_LOADFROMFILE);
 
 		_gold_icon = (HBITMAP)LoadImage(NULL, L"Resource/gold_nugget.bmp", IMAGE_BITMAP, 0, 0, LR_LOADFROMFILE);
 		for (int i = 0; i < 20; ++i) _item_images[i] = nullptr;
@@ -70,7 +71,10 @@ public:
 		
 		_health_potion_img = (HBITMAP)LoadImage(NULL, L"Resource/health_potion.bmp", IMAGE_BITMAP, 0, 0, LR_LOADFROMFILE);
 		_blaze_powder_img = (HBITMAP)LoadImage(NULL, L"Resource/blaze_powder.bmp", IMAGE_BITMAP, 0, 0, LR_LOADFROMFILE);
-		_arrow_img = new Gdiplus::Image(L"Resource/arrow.png");
+		_ender_pearl_img = (HBITMAP)LoadImage(NULL, L"Resource/ender_pearl.bmp", IMAGE_BITMAP, 0, 0, LR_LOADFROMFILE);
+		_shield_img = (HBITMAP)LoadImage(NULL, L"Resource/shield.bmp", IMAGE_BITMAP, 0, 0, LR_LOADFROMFILE);
+		_arrow_img = Gdiplus::Image::FromFile(L"Resource/arrow.png");
+		_fire_img = Gdiplus::Image::FromFile(L"Resource/fire_0.png");
 	}
 	~RenderManager();
 	void Release() override;
@@ -96,7 +100,7 @@ private:
 	HBITMAP _boots[5];
 	Gdiplus::Image* _swords[7];
 	HBITMAP _player_head;
-	HBITMAP _mob_heads[10];
+	HBITMAP _mob_heads[11];
 
 	HBITMAP _gold_icon;
 	HBITMAP _item_images[20];
@@ -108,5 +112,8 @@ private:
 
 	HBITMAP _health_potion_img;
 	HBITMAP _blaze_powder_img;
+	HBITMAP _ender_pearl_img;
+	HBITMAP _shield_img;
 	Gdiplus::Image* _arrow_img;
+	Gdiplus::Image* _fire_img;
 };

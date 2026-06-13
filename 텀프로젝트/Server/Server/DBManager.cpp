@@ -73,8 +73,15 @@ void DBManager::Init(std::function<void(int, int, const DBTask&)> notifyCb) {
 }
 
 void DBManager::StartDBThread() {
-	std::thread db_thread(&DBManager::DBWorkerThread, this);
-	db_thread.detach();
+	m_db_thread_running = true;
+	m_db_thread = std::thread(&DBManager::DBWorkerThread, this);
+}
+
+void DBManager::StopDBThread() {
+	m_db_thread_running = false;
+	if (m_db_thread.joinable()) {
+		m_db_thread.join();
+	}
 }
 
 void DBManager::PushTask(const DBTask& task) {
@@ -82,7 +89,7 @@ void DBManager::PushTask(const DBTask& task) {
 }
 
 void DBManager::DBWorkerThread() {
-	while (true) {
+	while (m_db_thread_running) {
 		DBTask task;
 		if (m_task_queue.try_pop(task)) {
 			
@@ -99,6 +106,15 @@ void DBManager::DBWorkerThread() {
 		}
 		else {
 			std::this_thread::sleep_for(std::chrono::milliseconds(10));
+		}
+	}
+
+	// 서버 종료 시 큐에 남은 작업을 모두 처리 (Drain)
+	DBTask task;
+	while (m_task_queue.try_pop(task)) {
+		auto it = m_handlers.find(task.type);
+		if (it != m_handlers.end()) {
+			it->second(task);
 		}
 	}
 }
@@ -247,6 +263,30 @@ void DBManager::HandleLoginAuth(DBTask& task) {
 					}
 					SQLFreeHandle(SQL_HANDLE_STMT, quest_hstmt);
 				}
+
+				// Fetch skill data
+				SQLHSTMT skill_hstmt = SQL_NULL_HSTMT;
+				retcode = SQLAllocHandle(SQL_HANDLE_STMT, m_hdbc, &skill_hstmt);
+				if (retcode == SQL_SUCCESS) {
+					query = L"EXEC select_skill_data '" + w_uid + L"'";
+					retcode = SQLExecDirect(skill_hstmt, (SQLWCHAR*)query.c_str(), SQL_NTS);
+					
+					if (retcode == SQL_SUCCESS || retcode == SQL_SUCCESS_WITH_INFO) {
+						retcode = SQLFetch(skill_hstmt);
+						if (retcode == SQL_SUCCESS || retcode == SQL_SUCCESS_WITH_INFO) {
+							SQLINTEGER tmp_sp = 0, tmp_mask = 0;
+							SQLLEN ind;
+							SQLGetData(skill_hstmt, 1, SQL_C_SLONG, &tmp_sp, sizeof(tmp_sp), &ind);
+							SQLGetData(skill_hstmt, 2, SQL_C_SLONG, &tmp_mask, sizeof(tmp_mask), &ind);
+							result.unspent_sp = static_cast<int>(tmp_sp);
+							result.skills_mask = static_cast<int>(tmp_mask);
+						}
+					} else {
+						result.unspent_sp = 0;
+						result.skills_mask = 0;
+					}
+					SQLFreeHandle(SQL_HANDLE_STMT, skill_hstmt);
+				}
 			}
 		}
 	}
@@ -304,6 +344,20 @@ void DBManager::HandleSaveData(DBTask& task) {
 			ReportDBError(quest_hstmt, SQL_HANDLE_STMT, retcode);
 		}
 		SQLFreeHandle(SQL_HANDLE_STMT, quest_hstmt);
+	}
+
+	// Save skill data
+	SQLHSTMT skill_hstmt = SQL_NULL_HSTMT;
+	retcode = SQLAllocHandle(SQL_HANDLE_STMT, m_hdbc, &skill_hstmt);
+	if (retcode == SQL_SUCCESS) {
+		std::wstring skill_query = L"EXEC update_skill_data '" + w_uid + L"', "
+								 + std::to_wstring(pd.unspent_sp) + L", "
+								 + std::to_wstring(pd.skills_mask);
+		retcode = SQLExecDirect(skill_hstmt, (SQLWCHAR*)skill_query.c_str(), SQL_NTS);
+		if (retcode != SQL_SUCCESS && retcode != SQL_SUCCESS_WITH_INFO) {
+			ReportDBError(skill_hstmt, SQL_HANDLE_STMT, retcode);
+		}
+		SQLFreeHandle(SQL_HANDLE_STMT, skill_hstmt);
 	}
 
 	// Save inventory

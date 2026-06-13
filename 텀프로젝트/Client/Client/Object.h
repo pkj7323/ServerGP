@@ -27,6 +27,9 @@ public:
 	std::wstring chat_msg;
 	std::chrono::time_point<std::chrono::steady_clock> chat_time;
 
+	// Burning status (Fire Aspect)
+	std::chrono::time_point<std::chrono::steady_clock> fire_end_time;
+
 	// AI State (NpcState enum from Protocol.h, 0=IDLE, 2=AGGRO)
 	char npc_state = 0;
 };

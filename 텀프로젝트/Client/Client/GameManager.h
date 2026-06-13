@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "Singleton.h"
 #include "Object.h"
@@ -68,6 +68,8 @@ public:
 	
 	bool show_inventory() const { return _showInventory; }
 	void toggle_inventory() { _showInventory = !_showInventory; }
+	bool show_skill_tree() const { return _showSkillTree; }
+	void toggle_skill_tree() { _showSkillTree = !_showSkillTree; }
 
 	int my_gold() const { return _myGold; }
 	void set_my_gold(int g) { _myGold = g; }
@@ -87,14 +89,22 @@ public:
 	int max_quest_progress() const { return _maxQuestProgress; }
 	void set_max_quest_progress(int val) { _maxQuestProgress = val; }
 
+	int unspent_sp() const { return _unspentSp; }
+	void set_unspent_sp(int val) { _unspentSp = val; }
+	int skills_mask() const { return _skillsMask; }
+	void set_skills_mask(int val) { _skillsMask = val; }
+
 	std::unordered_map<int, int>& my_inventory() { return _myInventory; }
 
 	std::vector<AttackEffect>& attack_effects() { return _attackEffects; }
 
 	void start_potion_cooldown() { _last_potion_use = std::chrono::steady_clock::now(); }
 	void start_skill_cooldown() { _last_skill_use = std::chrono::steady_clock::now(); _buff_end_time = _last_skill_use + std::chrono::seconds(5); }
+	void start_ender_pearl_cooldown() { _last_ender_pearl_use = std::chrono::steady_clock::now(); }
+
 	std::chrono::time_point<std::chrono::steady_clock> last_potion_use() const { return _last_potion_use; }
 	std::chrono::time_point<std::chrono::steady_clock> last_skill_use() const { return _last_skill_use; }
+	std::chrono::time_point<std::chrono::steady_clock> last_ender_pearl_use() const { return _last_ender_pearl_use; }
 	std::chrono::time_point<std::chrono::steady_clock> buff_end_time() const { return _buff_end_time; }
 
 private:
@@ -103,6 +113,7 @@ private:
 	bool _isChatting = false;
 	std::wstring _currentChatInput = L"";
 	bool _showInventory = false;
+	bool _showSkillTree = false;
 	int _myGold = 0;
 	std::unordered_map<int, int> _myInventory;
 	std::unordered_map<int, Object> _players;
@@ -115,6 +126,7 @@ private:
 	std::chrono::time_point<std::chrono::steady_clock> _last_potion_use;
 	std::chrono::time_point<std::chrono::steady_clock> _last_skill_use;
 	std::chrono::time_point<std::chrono::steady_clock> _buff_end_time;
+	std::chrono::time_point<std::chrono::steady_clock> _last_ender_pearl_use;
 
 	bool _isTrading = false;
 	int _tradeNpcId = -1;
@@ -123,6 +135,8 @@ private:
 	int _questStage = 0;
 	int _questProgress = 0;
 	int _maxQuestProgress = 0;
+	int _unspentSp = 0;
+	int _skillsMask = 0;
 
 	std::array<uint8_t, WORLD_WIDTH* WORLD_HEIGHT> _visualMap{};
 	std::array<uint8_t, WORLD_WIDTH* WORLD_HEIGHT> _collisionMap{};

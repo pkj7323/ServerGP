@@ -1,6 +1,6 @@
 ﻿#pragma once
 
-constexpr short PORT = 3500;
+constexpr short PORT = 3900;
 constexpr int WORLD_WIDTH = 2000;
 constexpr int WORLD_HEIGHT = 2000;
 constexpr int MAX_PLAYERS = 10000;
@@ -28,6 +28,7 @@ enum PACKET_TYPE {
 	C2S_USE_QUICKSLOT,	// Client to Server: Use quick slot (1 or 2)
 	C2S_INTERACT_NPC,   // Client to Server: Interact with an NPC (e.g. F key)
 	C2S_TRADE_COMMAND,  // Client to Server: Send trade option (e.g. 1, 2, 3)
+	C2S_LEARN_SKILL,    // Client to Server: Learn a skill
 
 	S2C_LOGIN_RESULT,	//	Server to Client: Login result
 						// 로그인 결과 패킷 (성공 여부와 메시지 포함)
@@ -43,6 +44,8 @@ enum PACKET_TYPE {
 	S2C_OPEN_TRADE_UI,  // Server to Client: Open trading UI for specific merchant
 	S2C_TRADE_RESULT,   // Server to Client: Result of trade (chat message)
 	S2C_QUEST_INFO,     // Server to Client: Quest stage and progress update
+	S2C_SKILL_SYNC,     // Server to Client: Synchronize player skills and cooldowns
+	S2C_UPDATE_POSITION,// Server to Client: Force position update for teleporting
 };
 
 // NPC AI 상태 - 클라이언트와 서버가 공유하는 enum
@@ -54,6 +57,13 @@ enum class NpcState : char {
 	FLEEING = 4,   // 도주 중 (크리퍼 제외)
 	DEAD     = 5,  // 사망
 	MERCHANT = 6,  // 상인 (이동/공격 불가)
+};
+
+enum class SkillType : int {
+	FIRE_ASPECT = 0, // Tier 1
+	LIFE_STEAL = 1,  // Tier 1
+	RESISTANCE = 2,  // Tier 2
+	ENDER_PEARL = 3  // Tier 2
 };
 
 enum class ItemType : int {
@@ -268,7 +278,6 @@ struct S2C_TradeResult {
 	char message[MAX_CHAT_MSG_LEN];
 };
 
-#pragma pack(push, 1)
 struct S2C_QuestInfo {
 	unsigned char size;
 	PACKET_TYPE   type;
@@ -276,6 +285,25 @@ struct S2C_QuestInfo {
 	int quest_progress;
 	int max_progress;
 };
-#pragma pack(pop)
+
+struct C2S_LearnSkill {
+	unsigned char size;
+	PACKET_TYPE type;
+	int skill_type; // Casted to int
+};
+
+struct S2C_SkillSync {
+	unsigned char size;
+	PACKET_TYPE type;
+	int unspent_sp;
+	int skills_mask; // Bitmask of learned skills
+};
+
+struct S2C_UpdatePosition {
+	unsigned char size;
+	PACKET_TYPE type;
+	short x;
+	short y;
+};
 
 #pragma pack(pop) // Restore default packing

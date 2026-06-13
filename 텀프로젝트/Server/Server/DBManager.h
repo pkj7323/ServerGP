@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include <variant>
 #include <string>
@@ -8,6 +8,8 @@
 #include <sql.h>
 #include <sqlext.h>
 #include <concurrent_queue.h>
+#include <thread>
+
 #include "Protocol.h"
 
 // Define player_data structure to hold data from/to the DB
@@ -30,6 +32,8 @@ struct player_data {
 	int gold;
 	int quest_stage;
 	int quest_progress;
+	int unspent_sp;
+	int skills_mask;
 	std::unordered_map<int, int> inventory;
 };
 
@@ -64,6 +68,9 @@ public:
 	// Spawns the background DB thread
 	void StartDBThread();
 	
+	// Stops and joins the DB thread
+	void StopDBThread();
+	
 	// Push a task to the DB queue from the worker threads
 	void PushTask(const DBTask& task);
 
@@ -78,6 +85,8 @@ private:
 	void ReportDBError(SQLHANDLE hHandle, SQLSMALLINT hType, RETCODE RetCode);
 
 private:
+	std::thread m_db_thread;
+	std::atomic<bool> m_db_thread_running{ false };
 	std::function<void(int, int, const DBTask&)> m_notifyCb;
 	SQLHENV m_henv;
 	SQLHDBC m_hdbc;

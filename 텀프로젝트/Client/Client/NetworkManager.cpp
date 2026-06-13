@@ -1,4 +1,4 @@
-#include "pch.h"
+﻿#include "pch.h"
 #include "NetworkManager.h"
 
 #include "common.h"
@@ -26,16 +26,18 @@ bool NetworkManager::Connect(const std::string& ip, int port)
 	WSADATA wsa; WSAStartup(MAKEWORD(2, 2), &wsa);
 	_socket = WSASocket(AF_INET, SOCK_STREAM, IPPROTO_TCP, nullptr, 0, 0);
 
-	// Set non-blocking
-	unsigned long arg = 1;
-	ioctlsocket(_socket, FIONBIO, &arg);
-
 	SOCKADDR_IN addr{};
 	addr.sin_family = AF_INET;
 	addr.sin_port = htons(port);
 	inet_pton(AF_INET, ip.c_str(), &addr.sin_addr);
 
-	connect(_socket, (sockaddr*)&addr, sizeof(addr));
+	if (connect(_socket, (sockaddr*)&addr, sizeof(addr)) == SOCKET_ERROR) {
+		return false;
+	}
+
+	// Set non-blocking after connection is established
+	unsigned long arg = 1;
+	ioctlsocket(_socket, FIONBIO, &arg);
 
 	C2S_Login login_pkt;
 	login_pkt.size = sizeof(login_pkt);
@@ -62,7 +64,10 @@ bool NetworkManager::send_packet(void* packet)
 	WSABUF buf{ (ULONG)size, (char*)packet };
 	DWORD sent;
 	if (WSASend(_socket, &buf, 1, &sent, 0, nullptr, nullptr) == SOCKET_ERROR) {
-		if (WSAGetLastError() != WSAEWOULDBLOCK) {
+		int err = WSAGetLastError();
+		if (err != WSAEWOULDBLOCK) {
+			std::cout << "send_packet failed! WSAGetLastError = " << err << "\n";
+			system("pause");
 			GameManager::Instance()->set_running(false);
 			return false;
 		}
@@ -83,11 +88,18 @@ void NetworkManager::process_network()
 	if (select(0, &read_set, nullptr, nullptr, &tv) > 0) {
 		int ret = recv(_socket, recv_buf + curr_size, 1024 - curr_size, 0);
 		if (ret == 0) {
+			std::cout << "recv returned 0 (Server closed connection)\n";
+			system("pause");
 			GameManager::Instance()->set_running(false);
 			return;
 		}
 		if (ret == SOCKET_ERROR) {
-			if (WSAGetLastError() != WSAEWOULDBLOCK) GameManager::Instance()->set_running(false);
+			int err = WSAGetLastError();
+			if (err != WSAEWOULDBLOCK) {
+				std::cout << "recv failed! WSAGetLastError = " << err << "\n";
+				system("pause");
+				GameManager::Instance()->set_running(false);
+			}
 			return;
 		}
 		curr_size += ret;
@@ -115,6 +127,7 @@ void NetworkManager::process_packet(char* ptr)
 		}
 		else {
 			std::cout << "Login failed. Message: " << p->message << "\n";
+			system("pause");
 			gm->set_running(false);
 		}
 		break;
@@ -130,7 +143,7 @@ void NetworkManager::process_packet(char* ptr)
 		S2C_AddObject* p = reinterpret_cast<S2C_AddObject*>(ptr);
 		if (is_npc_id(p->object_id))
 		{
-			gm->npcs().emplace(p->object_id, Object{ p->object_id, p->obj_name, p->x, p->y, (float)p->x, (float)p->y, p->head_tier, p->chest_tier, p->legs_tier, p->boots_tier, p->weapon_tier, p->dir_x, p->dir_y, p->visual_id, p->hp, p->max_hp, p->exp, p->level, L"", std::chrono::steady_clock::now(), p->npc_state });
+			gm->npcs().emplace(p->object_id, Object{ p->object_id, p->obj_name, p->x, p->y, (float)p->x, (float)p->y, p->head_tier, p->chest_tier, p->legs_tier, p->boots_tier, p->weapon_tier, p->dir_x, p->dir_y, p->visual_id, p->hp, p->max_hp, p->exp, p->level, L"", std::chrono::steady_clock::now(), std::chrono::steady_clock::now() });
 		}
 		else if (p->object_id == gm->my_id()) break;
 		else {
@@ -195,6 +208,9 @@ void NetworkManager::process_packet(char* ptr)
 
 			gm->npcs()[p->object_id].chat_msg = wmsg;
 			gm->npcs()[p->object_id].chat_time = std::chrono::steady_clock::now();
+			if (wmsg.find(L"Fire aspect -") == 0) {
+				gm->npcs()[p->object_id].fire_end_time = std::chrono::steady_clock::now() + std::chrono::milliseconds(1200);
+			}
 		}
 		else if (gm->players().contains(p->object_id)) {
 			std::string s_name = gm->players()[p->object_id].name;
@@ -303,6 +319,22 @@ void NetworkManager::process_packet(char* ptr)
 		gm->set_quest_stage(p->quest_stage);
 		gm->set_quest_progress(p->quest_progress);
 		gm->set_max_quest_progress(p->max_progress);
+		break;
+	}
+	case S2C_SKILL_SYNC: {
+		S2C_SkillSync* p = reinterpret_cast<S2C_SkillSync*>(ptr);
+		gm->set_unspent_sp(p->unspent_sp);
+		gm->set_skills_mask(p->skills_mask);
+		break;
+	}
+	case S2C_UPDATE_POSITION: {
+		S2C_UpdatePosition* p = reinterpret_cast<S2C_UpdatePosition*>(ptr);
+		if (gm->players().contains(gm->my_id())) {
+			gm->players()[gm->my_id()].x = p->x;
+			gm->players()[gm->my_id()].y = p->y;
+			gm->players()[gm->my_id()].render_x = static_cast<float>(p->x);
+			gm->players()[gm->my_id()].render_y = static_cast<float>(p->y);
+		}
 		break;
 	}
 	default:

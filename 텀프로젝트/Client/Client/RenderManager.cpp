@@ -24,7 +24,9 @@ static void DrawChatBubbles(Gdiplus::Graphics& graphics, Gdiplus::Font& font, fl
 			graphics.MeasureString(obj.chat_msg.c_str(), -1, &font, Gdiplus::PointF(0, 0), &bounds);
 			
 			Gdiplus::SolidBrush bubbleBrush(Gdiplus::Color(220, 255, 255, 255));
-			Gdiplus::SolidBrush textBrush(Gdiplus::Color(255, 0, 0, 0));
+			Gdiplus::Color textColor = (obj.chat_msg.find(L"Fire aspect -") == 0) ? 
+				Gdiplus::Color(255, 255, 0, 0) : Gdiplus::Color(255, 0, 0, 0);
+			Gdiplus::SolidBrush textBrush(textColor);
 			
 			graphics.FillRectangle(&bubbleBrush, px - bounds.Width / 2 - 5, py - bounds.Height - 5, bounds.Width + 10, bounds.Height + 10);
 			graphics.DrawString(obj.chat_msg.c_str(), -1, &font, Gdiplus::PointF(px - bounds.Width / 2, py - bounds.Height), &textBrush);
@@ -51,7 +53,7 @@ RenderManager::~RenderManager()
 		}
 	}
 	if (_player_head) { DeleteObject(_player_head); _player_head = nullptr; }
-	for (int i = 1; i <= 9; ++i) {
+	for (int i = 1; i <= 10; ++i) {
 		if (_mob_heads[i]) { DeleteObject(_mob_heads[i]); _mob_heads[i] = nullptr; }
 	}
 	if (_gold_icon) { DeleteObject(_gold_icon); _gold_icon = nullptr; }
@@ -64,7 +66,9 @@ RenderManager::~RenderManager()
 	if (_cactus_img) { DeleteObject(_cactus_img); _cactus_img = nullptr; }
 	if (_health_potion_img) { DeleteObject(_health_potion_img); _health_potion_img = nullptr; }
 	if (_blaze_powder_img) { DeleteObject(_blaze_powder_img); _blaze_powder_img = nullptr; }
+	if (_shield_img) { DeleteObject(_shield_img); _shield_img = nullptr; }
 	if (_arrow_img) { delete _arrow_img; _arrow_img = nullptr; }
+	if (_fire_img) { delete _fire_img; _fire_img = nullptr; }
 }
 
 void RenderManager::Release()
@@ -86,7 +90,7 @@ void RenderManager::Release()
 		}
 	}
 	if (_player_head) { DeleteObject(_player_head); _player_head = nullptr; }
-	for (int i = 1; i <= 9; ++i) {
+	for (int i = 1; i <= 10; ++i) {
 		if (_mob_heads[i]) { DeleteObject(_mob_heads[i]); _mob_heads[i] = nullptr; }
 	}
 	if (_gold_icon) { DeleteObject(_gold_icon); _gold_icon = nullptr; }
@@ -99,7 +103,9 @@ void RenderManager::Release()
 	if (_cactus_img) { DeleteObject(_cactus_img); _cactus_img = nullptr; }
 	if (_health_potion_img) { DeleteObject(_health_potion_img); _health_potion_img = nullptr; }
 	if (_blaze_powder_img) { DeleteObject(_blaze_powder_img); _blaze_powder_img = nullptr; }
+	if (_shield_img) { DeleteObject(_shield_img); _shield_img = nullptr; }
 	if (_arrow_img) { delete _arrow_img; _arrow_img = nullptr; }
+	if (_fire_img) { delete _fire_img; _fire_img = nullptr; }
 }
 
 void RenderManager::Render(HWND hWnd)
@@ -229,17 +235,25 @@ static auto last_time = std::chrono::steady_clock::now();
 			int imgW = cellWidth - padX * 2;
 			int imgH = cellHeight - padY * 2;
 
-			int draw_visual_id = npc.visual_id;
-			if (draw_visual_id == 10) draw_visual_id = 9; // Quest NPC uses Librarian head
-
-			if (draw_visual_id > 0 && draw_visual_id <= 9 && _mob_heads[draw_visual_id]) {
-				DrawBmpTransparent(memDC, memDC2, _mob_heads[draw_visual_id], px, py, imgW, imgH);
+			if (npc.visual_id > 0 && npc.visual_id <= 10 && _mob_heads[npc.visual_id]) {
+				DrawBmpTransparent(memDC, memDC2, _mob_heads[npc.visual_id], px, py, imgW, imgH);
 			} else {
 				HBRUSH hBrush = CreateSolidBrush(RGB(0, 255, 0));
 				HBRUSH oldB = (HBRUSH)SelectObject(memDC, hBrush);
 				Ellipse(memDC, px, py, px + imgW, py + imgH);
 				SelectObject(memDC, oldB);
 				DeleteObject(hBrush);
+			}
+
+			// --- 화염 이펙트 (Fire Aspect) ---
+			auto now = std::chrono::steady_clock::now();
+			if (now < npc.fire_end_time && _fire_img) {
+				auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
+				int frame = (now_ms / 31) % 32; // 32프레임 애니메이션 (약 1초 순환)
+				int srcY = frame * 16;
+				
+				Gdiplus::Rect destRect(px, py, imgW, imgH);
+				graphics.DrawImage(_fire_img, destRect, 0, srcY, 16, 16, Gdiplus::UnitPixel);
 			}
 
 			// --- 이름 출력 로직 추가 (그림자 포함) ---
@@ -282,6 +296,18 @@ static auto last_time = std::chrono::steady_clock::now();
 				DeleteObject(hBrush);
 			}
 
+			// 방어 패시브(SkillType::RESISTANCE = 2)가 있는 본인이라면 방패 렌더링
+			if (id == my_id && (gm->skills_mask() & (1 << 2))) {
+				if (_shield_img) {
+					int shieldW = imgW * 3 / 4; // 방패 크기를 약간 작게
+					int shieldH = imgH * 3 / 4;
+					// 머리의 오른쪽 아래에 살짝 겹치게 배치
+					int shieldX = px + imgW - shieldW / 2;
+					int shieldY = py + imgH - shieldH / 2;
+					DrawBmpTransparent(memDC, memDC2, _shield_img, shieldX, shieldY, shieldW, shieldH);
+				}
+			}
+
 			// --- 이름 출력 로직 추가 (그림자 포함) ---
 			std::wstring wName(player.name.begin(), player.name.end());
 			Gdiplus::SolidBrush nameBrush(Gdiplus::Color(255, 255, 255, 255));
@@ -291,7 +317,7 @@ static auto last_time = std::chrono::steady_clock::now();
 
 			// --- 체력(HP) 출력 로직 ---
 			std::wstring wHp = L"HP: " + std::to_wstring(player.hp) + L"/" + std::to_wstring(player.max_hp);
-			Gdiplus::SolidBrush hpBrush(Gdiplus::Color(255, 100, 255, 100)); // 연한 초록색
+			Gdiplus::SolidBrush hpBrush(Gdiplus::Color(255, 100, 255, 100)); // ?고븳 珥덈줉??
 			graphics.DrawString(wHp.c_str(), -1, &font, Gdiplus::PointF((float)(px + 1), (float)(py - 34)), &shadowBrush);
 			graphics.DrawString(wHp.c_str(), -1, &font, Gdiplus::PointF((float)px, (float)(py - 35)), &hpBrush);
 		}
@@ -330,7 +356,7 @@ static auto last_time = std::chrono::steady_clock::now();
 			if (rel_x >= 0 && rel_x < VIEW_WIDTH && rel_y >= 0 && rel_y < VIEW_HEIGHT) {
 				float screen_y = (VIEW_HEIGHT - 1.0f - rel_y);
 				int px = (int)(rel_x * cellWidth) + cellWidth / 2;
-				int py = (int)(screen_y * cellHeight) - 28;
+				int py = (int)(screen_y * cellHeight) - 50; // HP바 위쪽으로 올리기 위해 -28에서 -50으로 변경
 				Gdiplus::Font aggroFont(&fontFamily, 14, Gdiplus::FontStyleBold, Gdiplus::UnitPixel);
 				Gdiplus::SolidBrush aggroBrush(Gdiplus::Color(255, 255, 50, 50));
 				Gdiplus::SolidBrush shadowBrush(Gdiplus::Color(200, 0, 0, 0));
@@ -381,10 +407,10 @@ static auto last_time = std::chrono::steady_clock::now();
 					if (helmet_img) {
 						BITMAP bmp;
 						GetObject(helmet_img, sizeof(BITMAP), &bmp);
-						int img_w = bmp.bmWidth * 2; // scale if needed
-						int img_h = bmp.bmHeight * 2;
-						// Draw helmet above the head
-						DrawBmpTransparent(memDC, memDC2, helmet_img, px - img_w / 2, py - 40, img_w, img_h);
+						int img_w = static_cast<int>(bmp.bmWidth * 1.5f); // smaller size
+						int img_h = static_cast<int>(bmp.bmHeight * 1.5f)	;
+						// Draw helmet top-right of the head
+						DrawBmpTransparent(memDC, memDC2, helmet_img, px + (cellWidth / 4) - 6, py - 10, img_w, img_h);
 					}
 				}
 			}
@@ -668,6 +694,23 @@ static auto last_time = std::chrono::steady_clock::now();
 					graphics.DrawString(buf, -1, &font, Gdiplus::RectF((float)slotX, (float)slotY, 30.0f, 30.0f), &formatCenter, &whiteBrush);
 				}
 			}
+			// Slot 3: Ender Pearl
+			else if (i == 2) {
+				if ((gm->skills_mask() & (1 << 3)) != 0) { // Fix mask from 4 to 3
+					if (_ender_pearl_img) {
+						DrawBmpTransparent(memDC, memDC2, _ender_pearl_img, slotX + 3, slotY + 3, 24, 24);
+					}
+
+					int pearlElapsed = (int)std::chrono::duration_cast<std::chrono::milliseconds>(now - gm->last_ender_pearl_use()).count();
+					if (pearlElapsed < 10000) {
+						graphics.FillRectangle(&blackTransBrush, slotX, slotY, 30, 30);
+						float remain = (10000 - pearlElapsed) / 1000.0f;
+						wchar_t buf[16];
+						swprintf(buf, 16, L"%.1f", remain);
+						graphics.DrawString(buf, -1, &font, Gdiplus::RectF((float)slotX, (float)slotY, 30.0f, 30.0f), &formatCenter, &whiteBrush);
+					}
+				}
+			}
 		}
 
 		// 8. Draw Inventory (if toggled)
@@ -689,14 +732,14 @@ static auto last_time = std::chrono::steady_clock::now();
 			graphics.DrawString(goldStr.c_str(), -1, &font, Gdiplus::PointF(static_cast<float>(invX + 50), static_cast<float>(invY + 14)), &whiteBrush);
 
 			// --- Draw Eq text ---
-			graphics.DrawString(L"Eq:", -1, &font, Gdiplus::PointF(static_cast<float>(invX + 20), static_cast<float>(invY + 45)), &whiteBrush);
+			graphics.DrawString(L"장비:", -1, &font, Gdiplus::PointF(static_cast<float>(invX + 20), static_cast<float>(invY + 45)), &whiteBrush);
 
 			// Equipment Slot Rendering
-			int eqSlotX_helm = invX + 10;
-			int eqSlotX_chest = invX + 50;
-			int eqSlotX_legs = invX + 90;
-			int eqSlotX_boots = invX + 130;
-			int eqSlotX_sword = invX + 170;
+			int eqSlotX_helm = invX + 60;
+			int eqSlotX_chest = invX + 100;
+			int eqSlotX_legs = invX + 140;
+			int eqSlotX_boots = invX + 180;
+			int eqSlotX_sword = invX + 220;
 			int eqSlotY = invY + 40;
 			graphics.DrawRectangle(&whitePen, eqSlotX_helm, eqSlotY, 30, 30);
 			graphics.DrawRectangle(&whitePen, eqSlotX_chest, eqSlotY, 30, 30);
@@ -763,6 +806,63 @@ static auto last_time = std::chrono::steady_clock::now();
 				graphics.DrawRectangle(&whitePen, slotX, slotY, 30, 30);
 			}
 		}
+
+		// 9. Draw Skill Tree (if toggled)
+		if (gm->show_skill_tree()) {
+			int skillWidth = 400;
+			int skillHeight = 350;
+			int skillX = (width - skillWidth) / 2;
+			int skillY = (height - skillHeight) / 2;
+			Gdiplus::SolidBrush darkGreenBrush(Gdiplus::Color(220, 20, 40, 20));
+			graphics.FillRectangle(&darkGreenBrush, skillX, skillY, skillWidth, skillHeight);
+			graphics.DrawRectangle(&whitePen, skillX, skillY, skillWidth, skillHeight);
+
+			graphics.DrawString(L"[ SKILL TREE ]", -1, &font, Gdiplus::PointF(static_cast<float>(skillX + 140), static_cast<float>(skillY + 10)), &whiteBrush);
+			graphics.DrawString(L"닫기: ESC 또는 K", -1, &font, Gdiplus::PointF(static_cast<float>(skillX + 250), static_cast<float>(skillY + 10)), &whiteBrush);
+			std::wstring spStr = L"잔여 스킬 포인트(SP): " + std::to_wstring(gm->unspent_sp());
+			Gdiplus::SolidBrush yellowBrush(Gdiplus::Color(255, 255, 255, 0));
+			graphics.DrawString(spStr.c_str(), -1, &font, Gdiplus::PointF(static_cast<float>(skillX + 20), static_cast<float>(skillY + 40)), &yellowBrush);
+			auto has_skill = [&](int skill_enum) {
+				return (gm->skills_mask() & (1 << skill_enum)) != 0;
+				};
+			int curY = skillY + 80;
+			auto draw_skill_item = [&](int num, const std::wstring& name, const std::wstring& desc, int skill_enum) {
+				std::wstring prefix = L"[" + std::to_wstring(num) + L"] " + name;
+				graphics.DrawString(prefix.c_str(), -1, &font, Gdiplus::PointF(static_cast<float>(skillX + 20), static_cast<float>(curY)), &whiteBrush);
+
+				Gdiplus::Font smallFont(&fontFamily, 12, Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
+				graphics.DrawString(desc.c_str(), -1, &smallFont, Gdiplus::PointF(static_cast<float>(skillX + 30), static_cast<float>(curY + 20)), &whiteBrush);
+				std::wstring status;
+				Gdiplus::SolidBrush* statusBrush = &whiteBrush;
+				Gdiplus::SolidBrush greenBrush(Gdiplus::Color(255, 100, 255, 100));
+				Gdiplus::SolidBrush redBrush(Gdiplus::Color(255, 255, 100, 100));
+				if (has_skill(skill_enum)) {
+					status = L"배움";
+					statusBrush = &yellowBrush;
+				}
+				else {
+					if (gm->unspent_sp() > 0) {
+						status = L"숫자키 " + std::to_wstring(num) + L" 눌러 획득";
+						statusBrush = &greenBrush;
+					}
+					else {
+						status = L"포인트 부족";
+						statusBrush = &redBrush;
+					}
+				}
+				graphics.DrawString(status.c_str(), -1, &font, Gdiplus::PointF(static_cast<float>(skillX + 220), static_cast<float>(curY)), statusBrush);
+				curY += 50;
+				};
+			// SkillType::FIRE_ASPECT = 0
+			draw_skill_item(1, L"발화 (1티어)", L"공격 시 적을 불태워 3초간 도트 데미지를 줍니다.", 0);
+			// SkillType::LIFE_STEAL = 1
+			draw_skill_item(2, L"흡혈 (1티어)", L"공격 시 가한 데미지의 일부(15%)를 회복합니다.", 1);
+			// SkillType::RESISTANCE = 2
+			draw_skill_item(3, L"저항 (2티어)", L"받는 데미지가 영구적으로 30% 감소합니다.", 2);
+			// SkillType::ENDER_PEARL = 3
+			draw_skill_item(4, L"엔더 진주 (2티어)", L"3칸 앞 몬스터나 마우스 방향으로 순간이동합니다.", 3);
+		}
+
 		// Trade UI
 		if (gm->is_trading()) {
 			int tradeX = width / 2 - 200;
