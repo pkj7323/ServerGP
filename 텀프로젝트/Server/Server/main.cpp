@@ -51,9 +51,9 @@ void error_display(const std::wstring& msg, int err_no)
 	LocalFree(lpMsgBuf);
 }
 constexpr int BUF_SIZE = 1024;
-constexpr int VIEW_RANGE = 6;
+constexpr int VIEW_RANGE = 5;
 constexpr int SECTOR_SIZE = 10;
-constexpr int MOVE_COOL_TIME = 1000; // NPC 이동 쿨타임 (밀리초)
+constexpr int MOVE_COOL_TIME = 3000; // NPC 이동 쿨타임 (밀리초)
 constexpr int MOVE_COOL_TIME_VARIATION = 1000;
 
 std::atomic<int> player_index = 1;
@@ -132,13 +132,13 @@ public:
 		wsabuffer.buf = pending_flat_data.data();
 		wsabuffer.len = static_cast<ULONG>(pending_flat_data.size());
 	}
-	EXP_OVER(char* packet)
+	EXP_OVER(int size, char* packet)
 	{
-		wsabuffer.len = packet[0];
+		wsabuffer.len = size;
 		wsabuffer.buf = buff;
 		ZeroMemory(&over, sizeof(over));
 		type = io_type::send;
-		memcpy(buff, packet, packet[0]);
+		memcpy(buff, packet, size);
 	}
 
 };
@@ -532,8 +532,6 @@ public:
 			delete send_over;
 			std::lock_guard<std::mutex> lock(send_mtx);
 			is_sending = false;
-			// 에러 발생 시 클라이언트 연결 종료 고려
-			// client_disconnect(id_); 
 		}
 	}
 
@@ -781,19 +779,11 @@ public:
 						stat.boots_tier = 0;
 			stat.weapon_tier = 0;
 
-			S2C_ChatMessage chat_pkt;
-			chat_pkt.size = sizeof(chat_pkt);
-			chat_pkt.type = S2C_CHAT_MESSAGE;
-			chat_pkt.object_id = id_;
-			std::string msg = "회복! 체력: " + std::to_string(_hp);
-			strncpy_s(chat_pkt.message, msg.c_str(), sizeof(chat_pkt.message));
-			
 			for (auto pid : sector.get_objects_nearby_sector(x_, y_)) {
 				if (!is_npc_id(pid)) {
 					std::shared_ptr<SESSION> s = clients[pid].load();
 					if (s && s->state_ == client_state::playing) {
 						s->do_send(stat.size, reinterpret_cast<char*>(&stat));
-						s->do_send(chat_pkt.size, reinterpret_cast<char*>(&chat_pkt));
 					}
 				}
 			}
@@ -1086,13 +1076,13 @@ public:
 			break;
 		}
 
-		// 채팅 이펀트
-		if (!action.chat_msg.empty()) {
+		// 채팅 이펀트 (보스/상인/퀘스트 NPC만)
+		if (!action.chat_msg.empty() && (_npcType == NPC_ENDER_DRAGON || _aiState == NpcState::MERCHANT || _visualId == 10)) {
 			S2C_ChatMessage chat_pkt;
-			chat_pkt.size = sizeof(chat_pkt);
 			chat_pkt.type = S2C_CHAT_MESSAGE;
 			chat_pkt.object_id = id_;
 			strncpy_s(chat_pkt.message, action.chat_msg.c_str(), sizeof(chat_pkt.message));
+			chat_pkt.size = static_cast<unsigned char>(offsetof(S2C_ChatMessage, message) + strlen(chat_pkt.message) + 1);
 			for (auto pid : old_vl) {
 				std::shared_ptr<SESSION> s = clients[pid].load();
 				if (s && s->state_ == client_state::playing)
@@ -1114,7 +1104,19 @@ public:
 		for (auto& pid : new_vl) {
 			if (!old_vl.contains(pid)) {
 				std::shared_ptr<SESSION> s = clients[pid].load();
-				if (s) s->send_add_player(id_);
+				if (s) {
+					S2C_AddNpc add_npc;
+					add_npc.size = sizeof(add_npc);
+					add_npc.type = S2C_ADD_NPC;
+					add_npc.object_id = id_;
+					add_npc.visual_id = _visualId;
+					add_npc.x = x_;
+					add_npc.y = y_;
+					add_npc.hp = _hp;
+					add_npc.max_hp = _maxHp;
+					add_npc.npc_state = static_cast<char>(_aiState);
+					s->do_send(add_npc.size, reinterpret_cast<char*>(&add_npc));
+				}
 			} else {
 				std::shared_ptr<SESSION> s = clients[pid].load();
 				if (s && s->state_ == client_state::playing)
@@ -1356,27 +1358,17 @@ bool SESSION::proccess_packet(unsigned char* buff)
 			{
 				if (is_npc_id(id)) {
 					auto npc = npcs[id].load();
-					S2C_AddObject add_pkt;
-					add_pkt.size = sizeof(add_pkt);
-					add_pkt.type = PACKET_TYPE::S2C_ADD_OBJECT;
-					add_pkt.object_id = id;
-					add_pkt.x = npc->x_;
-					add_pkt.y = npc->y_;
-					strcpy_s(add_pkt.obj_name, npc->userName_);
-					add_pkt.visual_id = npc->_visualId;
-					add_pkt.hp        = npc->_hp;
-					add_pkt.max_hp    = npc->_maxHp;
-					add_pkt.exp       = npc->_exp;
-					add_pkt.level     = npc->_level;
-					add_pkt.head_tier = 0;
-					add_pkt.chest_tier = 0;
-					add_pkt.legs_tier = 0;
-					add_pkt.boots_tier = 0; // NPCs don't have armor tier
-					add_pkt.weapon_tier = 0;
-					add_pkt.dir_x = 0;
-					add_pkt.dir_y = -1;
-					add_pkt.npc_state = static_cast<char>(npc->_aiState);
-					do_send(add_pkt.size, reinterpret_cast<char*>(&add_pkt));
+					S2C_AddNpc add_npc;
+					add_npc.size = sizeof(add_npc);
+					add_npc.type = S2C_ADD_NPC;
+					add_npc.object_id = id;
+					add_npc.visual_id = npc->_visualId;
+					add_npc.x = npc->x_;
+					add_npc.y = npc->y_;
+					add_npc.hp = npc->_hp;
+					add_npc.max_hp = npc->_maxHp;
+					add_npc.npc_state = static_cast<char>(npc->_aiState);
+					do_send(add_npc.size, reinterpret_cast<char*>(&add_npc));
 
 					npc->wake_up();
 
@@ -2338,22 +2330,17 @@ void SESSION::force_teleport(int tx, int ty) {
 		if (!old_view.contains(oid)) {
 			if (is_npc_id(oid)) {
 				auto npc = npcs[oid].load();
-				S2C_AddObject add_pkt;
-				add_pkt.size = sizeof(add_pkt);
-				add_pkt.type = PACKET_TYPE::S2C_ADD_OBJECT;
-				add_pkt.object_id = oid;
-				add_pkt.x = npc->x_;
-				add_pkt.y = npc->y_;
-				strncpy_s(add_pkt.obj_name, npc->userName_, sizeof(add_pkt.obj_name));
-				add_pkt.visual_id = npc->_visualId;
-				add_pkt.hp        = npc->_hp;
-				add_pkt.max_hp    = npc->_maxHp;
-				add_pkt.exp       = npc->_exp;
-				add_pkt.level     = npc->_level;
-				add_pkt.head_tier = 0; add_pkt.chest_tier = 0; add_pkt.legs_tier = 0;
-				add_pkt.boots_tier = 0; add_pkt.weapon_tier = 0;
-				add_pkt.npc_state = static_cast<char>(npc->_aiState);
-				do_send(add_pkt.size, reinterpret_cast<char*>(&add_pkt));
+				S2C_AddNpc add_npc;
+				add_npc.size = sizeof(add_npc);
+				add_npc.type = S2C_ADD_NPC;
+				add_npc.object_id = oid;
+				add_npc.visual_id = npc->_visualId;
+				add_npc.x = npc->x_;
+				add_npc.y = npc->y_;
+				add_npc.hp = npc->_hp;
+				add_npc.max_hp = npc->_maxHp;
+				add_npc.npc_state = static_cast<char>(npc->_aiState);
+				do_send(add_npc.size, reinterpret_cast<char*>(&add_npc));
 				npc->wake_up();
 			} else {
 				std::shared_ptr<SESSION> s = clients[oid].load();
@@ -2443,27 +2430,17 @@ void SESSION::send_already_spawn_players()
 			if (is_npc_id(id)) {
 				auto npc = npcs[id].load();
 				if (is_visible(npc->x_, npc->y_, npc->_npcType)) {
-					S2C_AddObject add_pkt;
-					add_pkt.size = sizeof(add_pkt);
-					add_pkt.type = PACKET_TYPE::S2C_ADD_OBJECT;
-					add_pkt.object_id = id;
-					add_pkt.x = npc->x_;
-					add_pkt.y = npc->y_;
-					strcpy_s(add_pkt.obj_name, npc->userName_);
-					add_pkt.visual_id = npc->_visualId;
-					add_pkt.hp        = npc->_hp;
-					add_pkt.max_hp    = npc->_maxHp;
-					add_pkt.exp       = npc->_exp;
-					add_pkt.level     = npc->_level;
-					add_pkt.head_tier = 0;
-					add_pkt.chest_tier = 0;
-					add_pkt.legs_tier = 0;
-					add_pkt.boots_tier = 0;
-					add_pkt.weapon_tier = 0;
-					add_pkt.dir_x = 0;
-					add_pkt.dir_y = -1;
-					add_pkt.npc_state = static_cast<char>(npc->_aiState);
-					do_send(add_pkt.size, reinterpret_cast<char*>(&add_pkt));
+					S2C_AddNpc add_npc;
+					add_npc.size = sizeof(add_npc);
+					add_npc.type = S2C_ADD_NPC;
+					add_npc.object_id = id;
+					add_npc.visual_id = npc->_visualId;
+					add_npc.x = npc->x_;
+					add_npc.y = npc->y_;
+					add_npc.hp = npc->_hp;
+					add_npc.max_hp = npc->_maxHp;
+					add_npc.npc_state = static_cast<char>(npc->_aiState);
+					do_send(add_npc.size, reinterpret_cast<char*>(&add_npc));
 
 					visible_players_mutex.lock();
 					visible_players.insert(id);
@@ -2896,25 +2873,15 @@ void worker_thread()
 					npc->wake_up(); // 주변 플레이어 감지 및 이동 타이머 시작
 					
 					// 주변 플레이어에게 NPC 등장(리스폰) 패킷 전송
-					S2C_AddObject add_pkt;
+					S2C_AddNpc add_pkt;
 					add_pkt.size = sizeof(add_pkt);
-					add_pkt.type = PACKET_TYPE::S2C_ADD_OBJECT;
+					add_pkt.type = PACKET_TYPE::S2C_ADD_NPC;
 					add_pkt.object_id = npc->id_;
 					add_pkt.x = npc->x_;
 					add_pkt.y = npc->y_;
-					strcpy_s(add_pkt.obj_name, npc->userName_);
 					add_pkt.visual_id = npc->_visualId;
 					add_pkt.hp        = npc->_hp;
 					add_pkt.max_hp    = npc->_maxHp;
-					add_pkt.exp       = npc->_exp;
-					add_pkt.level     = npc->_level;
-					add_pkt.head_tier = 0;
-					add_pkt.chest_tier = 0;
-					add_pkt.legs_tier = 0;
-					add_pkt.boots_tier = 0;
-					add_pkt.weapon_tier = 0;
-					add_pkt.dir_x = 0;
-					add_pkt.dir_y = -1;
 					add_pkt.npc_state = static_cast<char>(npc->_aiState);
 					
 					for (auto pid : sector.get_objects_nearby_sector(npc->x_, npc->y_)) {
@@ -2973,20 +2940,13 @@ void worker_thread()
 				stat.boots_tier = 0;
 				stat.weapon_tier = 0;
 
-				S2C_ChatMessage chat;
-				chat.size = sizeof(chat);
-				chat.type = S2C_CHAT_MESSAGE;
-				chat.object_id = ev.obj_id;
-				std::string dot_msg = "Fire aspect -" + std::to_string(ev.attack_power);
-				strncpy_s(chat.message, dot_msg.c_str(), sizeof(chat.message));
-
 				auto nearby = sector.get_objects_nearby_sector(npc->x_, npc->y_);
 				for (auto pid : nearby) {
 					if (!is_npc_id(pid)) {
 						std::shared_ptr<SESSION> s = clients[pid].load();
 						if (s && s->state_ == client_state::playing) {
+							if (!s->is_visible(npc->x_, npc->y_)) continue;
 							s->do_send(stat.size, reinterpret_cast<char*>(&stat));
-							s->do_send(chat.size, reinterpret_cast<char*>(&chat));
 						}
 					}
 				}
@@ -3106,25 +3066,15 @@ void worker_thread()
 					{
 						if (is_npc_id(oid)) {
 							auto npc = npcs[oid].load();
-							S2C_AddObject add_pkt;
+							S2C_AddNpc add_pkt;
 							add_pkt.size = sizeof(add_pkt);
-							add_pkt.type = PACKET_TYPE::S2C_ADD_OBJECT;
+							add_pkt.type = PACKET_TYPE::S2C_ADD_NPC;
 							add_pkt.object_id = oid;
 							add_pkt.x = npc->x_;
 							add_pkt.y = npc->y_;
-							strcpy_s(add_pkt.obj_name, npc->userName_);
 							add_pkt.visual_id = npc->_visualId;
 							add_pkt.hp        = npc->_hp;
 							add_pkt.max_hp    = npc->_maxHp;
-							add_pkt.exp       = npc->_exp;
-							add_pkt.level     = npc->_level;
-							add_pkt.head_tier = 0;
-							add_pkt.chest_tier = 0;
-							add_pkt.legs_tier = 0;
-							add_pkt.boots_tier = 0;
-							add_pkt.weapon_tier = 0;
-							add_pkt.dir_x = 0;
-							add_pkt.dir_y = -1;
 							add_pkt.npc_state = static_cast<char>(npc->_aiState);
 							s->do_send(add_pkt.size, reinterpret_cast<char*>(&add_pkt));
 
@@ -3204,14 +3154,16 @@ void worker_thread()
 				if (is_npc_id(pid)) continue;
 				auto ps = clients[pid].load();
 				if (ps && ps->state_ == client_state::playing) {
-					ps->do_send(eff.size, reinterpret_cast<char*>(&eff));
-					
+					// Damage check regardless of visibility
 					if (ps->player_->x_ == cx && ps->player_->y_ == cy) {
 						hit_player = true;
 						int def = ps->player_->get_defense();
 						int actual_dmg = std::max(1, ev.attack_power - def);
 						player_take_damage(ps, actual_dmg);
 					}
+					// Only send visual effect if in view
+					if (ps->is_visible(cx, cy))
+						ps->do_send(eff.size, reinterpret_cast<char*>(&eff));
 				}
 			}
 

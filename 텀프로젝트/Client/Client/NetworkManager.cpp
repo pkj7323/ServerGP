@@ -152,6 +152,36 @@ void NetworkManager::process_packet(char* ptr)
 		}
 		break;
 	}
+	case S2C_ADD_NPC: {
+		S2C_AddNpc* p = reinterpret_cast<S2C_AddNpc*>(ptr);
+		// visual_id -> NPC name mapping (클라이언트 하드코딩)
+		std::string npc_name;
+		switch (p->visual_id) {
+		case 1:  npc_name = "Zombie"; break;
+		case 2:  npc_name = "Skeleton"; break;
+		case 3:  npc_name = "Creeper"; break;
+		case 4:  npc_name = "Enderman"; break;
+		case 5:  npc_name = "Iron Golem"; break;
+		case 6:  npc_name = "Priest"; break;
+		case 7:  npc_name = "Armorer"; break;
+		case 8:  npc_name = "Weaponsmith"; break;
+		case 9:  npc_name = "Librarian"; break;
+		case 10: npc_name = "Quest NPC"; break;
+		case 11: npc_name = "Ender Dragon"; break;
+		case 12: npc_name = ""; break; // Fire Zone (no name)
+		default: npc_name = "NPC"; break;
+		}
+		Object obj;
+		obj.id = p->object_id;
+		obj.name = npc_name;
+		obj.x = p->x; obj.y = p->y;
+		obj.render_x = (float)p->x; obj.render_y = (float)p->y;
+		obj.visual_id = p->visual_id;
+		obj.hp = p->hp; obj.max_hp = p->max_hp;
+		obj.npc_state = p->npc_state;
+		gm->npcs().emplace(p->object_id, obj);
+		break;
+	}
 	case S2C_MOVE_OBJECT: {
 		S2C_MoveObject* p = reinterpret_cast<S2C_MoveObject*>(ptr);
 		if (is_npc_id(p->object_id))

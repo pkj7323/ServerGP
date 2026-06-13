@@ -46,6 +46,7 @@ enum PACKET_TYPE {
 	S2C_QUEST_INFO,     // Server to Client: Quest stage and progress update
 	S2C_SKILL_SYNC,     // Server to Client: Synchronize player skills and cooldowns
 	S2C_UPDATE_POSITION,// Server to Client: Force position update for teleporting
+	S2C_ADD_NPC,		// Server to Client: Add NPC (lightweight, no equipment/name)
 };
 
 // NPC AI 상태 - 클라이언트와 서버가 공유하는 enum
@@ -192,6 +193,19 @@ struct S2C_AddObject {
 	short dir_x;
 	short dir_y;
 	char npc_state; // NpcState enum value (0=IDLE, 2=AGGRO, etc)
+};
+
+// NPC 전용 경량 패킷 (장비/이름/EXP/레벨 제거, 약 20바이트)
+struct S2C_AddNpc {
+	unsigned char size;
+	PACKET_TYPE   type;
+	int object_id;
+	int visual_id;
+	short x;
+	short y;
+	int hp;
+	int max_hp;
+	char npc_state;
 };
 
 struct S2C_RemoveObject {
