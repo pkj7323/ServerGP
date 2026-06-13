@@ -1,4 +1,4 @@
-#include "pch.h"
+﻿#include "pch.h"
 #include "RenderManager.h"
 #include "GameManager.h"
 
@@ -427,15 +427,65 @@ static auto last_time = std::chrono::steady_clock::now();
 			if (rel_x >= 0 && rel_x < VIEW_WIDTH && rel_y >= 0 && rel_y < VIEW_HEIGHT) {
 				float screen_y = (VIEW_HEIGHT - 1.0f - rel_y);
 				int px = (int)(rel_x * cellWidth) + cellWidth / 2;
-				int py = (int)(screen_y * cellHeight) - 50; // HP바 위쪽으로 올리기 위해 -28에서 -50으로 변경
+				int py = (int)(screen_y * cellHeight) - 50; // 이름표(34)보다 살짝 더 위로
+
 				Gdiplus::Font aggroFont(&fontFamily, 14, Gdiplus::FontStyleBold, Gdiplus::UnitPixel);
 				Gdiplus::SolidBrush aggroBrush(Gdiplus::Color(255, 255, 50, 50));
 				Gdiplus::SolidBrush shadowBrush(Gdiplus::Color(200, 0, 0, 0));
-				// 그림자
+
 				graphics.DrawString(L"!", -1, &aggroFont, Gdiplus::PointF((float)(px - 3), (float)(py + 1)), &shadowBrush);
 				// 느낌표
 				graphics.DrawString(L"!", -1, &aggroFont, Gdiplus::PointF((float)(px - 4), (float)(py)), &aggroBrush);
 			}
+		}
+
+		// 4.5.7 Draw Damage Texts
+		auto& damage_texts = gm->damage_texts();
+		for (auto it = damage_texts.begin(); it != damage_texts.end(); ) {
+			auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - it->start_time).count();
+			if (elapsed_ms > 1000) {
+				it = damage_texts.erase(it);
+				continue;
+			}
+			
+			float obj_rx = -1, obj_ry = -1;
+			if (players.contains(it->object_id)) {
+				obj_rx = players[it->object_id].render_x;
+				obj_ry = players[it->object_id].render_y;
+			} else if (npcs.contains(it->object_id)) {
+				obj_rx = npcs[it->object_id].render_x;
+				obj_ry = npcs[it->object_id].render_y;
+			}
+			
+			if (obj_rx != -1) {
+				float rel_x = obj_rx - left_x;
+				float rel_y = obj_ry - bottom_y;
+				if (rel_x >= 0 && rel_x < VIEW_WIDTH && rel_y >= 0 && rel_y < VIEW_HEIGHT) {
+					float screen_y = (VIEW_HEIGHT - 1.0f - rel_y);
+					int px = (int)(rel_x * cellWidth) + cellWidth / 2;
+					int py = (int)(screen_y * cellHeight) - 30; // 몬스터 머리 위 시작점
+					
+					// 위로 떠오르는 애니메이션 및 페이드 아웃
+					float float_y = (elapsed_ms / 1000.0f) * 60.0f;
+					int alpha = 255 - (int)((elapsed_ms / 1000.0f) * 255);
+					
+					std::wstring dmg_str = std::to_wstring(it->damage);
+					Gdiplus::SolidBrush dmgBrush(Gdiplus::Color(alpha, 255, 100, 50)); // 주황-빨강색
+					Gdiplus::SolidBrush dmgShadow(Gdiplus::Color(alpha, 0, 0, 0));
+					
+					Gdiplus::Font dmgFont(&fontFamily, 26, Gdiplus::FontStyleBold, Gdiplus::UnitPixel);
+					Gdiplus::StringFormat formatCenter;
+					formatCenter.SetAlignment(Gdiplus::StringAlignmentCenter);
+					formatCenter.SetLineAlignment(Gdiplus::StringAlignmentCenter);
+					
+					Gdiplus::PointF pt(px + it->offset_x * 30.0f, py - float_y + it->offset_y * 15.0f);
+					Gdiplus::PointF shadowPt(pt.X + 2, pt.Y + 2);
+					
+					graphics.DrawString(dmg_str.c_str(), -1, &dmgFont, shadowPt, &formatCenter, &dmgShadow);
+					graphics.DrawString(dmg_str.c_str(), -1, &dmgFont, pt, &formatCenter, &dmgBrush);
+				}
+			}
+			++it;
 		}
 
 		// 4.5.6 Draw Quest Indicators on Quest NPC (visual_id == 10)

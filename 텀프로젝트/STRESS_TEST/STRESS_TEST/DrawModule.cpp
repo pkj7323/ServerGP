@@ -17,6 +17,8 @@
 #include <memory>
 //#include <gl\glaux.h>		// Header File For The Glaux Library
 
+#include "../../Server/Server/Protocol.h"
+
 #pragma comment (lib, "opengl32.lib")
 #pragma comment (lib, "glu32.lib")
 
@@ -101,7 +103,8 @@ GLvoid ReSizeGLScene(GLsizei width, GLsizei height)		// Resize And Initialize Th
 	glLoadIdentity();									// Reset The Projection Matrix
 
 														// Calculate The Aspect Ratio Of The Window
-	gluPerspective(45.0f, (GLfloat)width / (GLfloat)height, 0.1f, 100.0f);
+	// 2D 픽셀 매핑을 위해 직교 투영(Ortho) 사용
+	glOrtho(0.0f, (GLfloat)width, (GLfloat)height, 0.0f, -1.0f, 1.0f);
 
 	glMatrixMode(GL_MODELVIEW);							// Select The Modelview Matrix
 	glLoadIdentity();									// Reset The Modelview Matrix
@@ -130,15 +133,19 @@ int DrawGLScene(GLvoid)									// Here's Where We Do All The Drawing
 	float* points = nullptr;
 	GetPointCloud(&size, &points);
 
+	GLint viewport[4];
+	glGetIntegerv(GL_VIEWPORT, viewport);
+	float screen_w = viewport[2];
+	float screen_h = viewport[3];
+
 	glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);	// Clear Screen And Depth Buffer
 	glLoadIdentity();									// Reset The Current Modelview Matrix
-	glTranslatef(0.14f, -0.4f, -1.0f);						// Move One Unit Into The Screen
-															// Pulsing Colors Based On Text Position
+
 	glColor3f(1, 1, 0);
-	// Position The Text On The Screen
-	glRasterPos2f(0.0f, 0.00f);
-	glPrint("STRESS TEST [%d]", (int)active_clients);	// Print GL Text To The Screen
-	glRasterPos2f(0.0f, 0.05f);
+	// 텍스트를 우측 하단으로 이동
+	glRasterPos2f(screen_w - 250.0f, screen_h - 40.0f);
+	glPrint("STRESS TEST [%d]", (int)active_clients);
+	glRasterPos2f(screen_w - 250.0f, screen_h - 15.0f);
 	glPrint("Delay : %dms", global_delay);
 
 	glColor3f(1, 1, 1);
@@ -147,12 +154,11 @@ int DrawGLScene(GLvoid)									// Here's Where We Do All The Drawing
 	glBegin(GL_POINTS);
 	for (int i = 0; i < size; i++)
 	{
-		float x, y, z;
-
-		x = points[i * 2] / 200.0f - 1.25f;
-		y = 1.25f - points[i * 2 + 1] / 200.0f;
-		z = -1.0f;
-		glVertex3f(x, y, z);
+		float x, y;
+		// 맵 좌표(0~WORLD_WIDTH)를 화면 픽셀(0~screen_w)로 비율 변환
+		x = points[i * 2] * (screen_w / (float)WORLD_WIDTH);
+		y = points[i * 2 + 1] * (screen_h / (float)WORLD_HEIGHT);
+		glVertex2f(x, y);
 	}
 	glEnd();
 
@@ -509,4 +515,7 @@ int main()
 	}
 
 	WinMain(0, 0, 0, 0);
+
+	// 백그라운드 스레드들이 파괴 중인 전역 변수에 접근하여 크래시 나는 것을 방지하기 위해 즉시 종료
+	ExitProcess(0);
 }

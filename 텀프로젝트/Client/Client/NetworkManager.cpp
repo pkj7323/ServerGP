@@ -1,4 +1,4 @@
-﻿#include "pch.h"
+#include "pch.h"
 #include "NetworkManager.h"
 
 #include "common.h"
@@ -247,6 +247,10 @@ void NetworkManager::process_packet(char* ptr)
 	case S2C_STATUS_CHANGE: {
 		S2C_StatusChange* p = reinterpret_cast<S2C_StatusChange*>(ptr);
 		if (gm->players().contains(p->object_id)) {
+			int old_hp = gm->players()[p->object_id].hp;
+			if (p->hp < old_hp) {
+				gm->add_damage_text(p->object_id, old_hp - p->hp);
+			}
 			gm->players()[p->object_id].head_tier = p->head_tier;
 			gm->players()[p->object_id].chest_tier = p->chest_tier;
 			gm->players()[p->object_id].legs_tier = p->legs_tier;
@@ -258,6 +262,10 @@ void NetworkManager::process_packet(char* ptr)
 			gm->players()[p->object_id].level = p->level;
 		}
 		else if (gm->npcs().contains(p->object_id)) {
+			int old_hp = gm->npcs()[p->object_id].hp;
+			if (p->hp < old_hp) {
+				gm->add_damage_text(p->object_id, old_hp - p->hp);
+			}
 			gm->npcs()[p->object_id].head_tier = p->head_tier;
 			gm->npcs()[p->object_id].chest_tier = p->chest_tier;
 			gm->npcs()[p->object_id].legs_tier = p->legs_tier;

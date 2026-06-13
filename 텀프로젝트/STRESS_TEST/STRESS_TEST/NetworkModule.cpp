@@ -13,6 +13,7 @@
 #include <queue>
 #include <array>
 #include <memory>
+#include <unordered_map>
 
 using namespace std;
 using namespace chrono;
@@ -58,20 +59,20 @@ struct CLIENT {
 	high_resolution_clock::time_point last_move_time;
 };
 
-array<int, MAX_CLIENTS> client_map;
+unordered_map<int, int> client_map; // server_player_id -> local client index
+mutex client_map_mutex;
 array<CLIENT, MAX_CLIENTS> g_clients;
 atomic_int num_connections;
 atomic_int client_to_close;
 atomic_int active_clients;
 
-int			global_delay;				// ms����, 1000�� ������ Ŭ���̾�Ʈ ���� ����
+int			global_delay;				
 
 vector <thread*> worker_threads;
 thread test_thread;
 
 float point_cloud[MAX_TEST * 2];
 
-// ���߿� NPC���� �߰� Ȯ�� ��
 struct ALIEN {
 	int id;
 	int x, y;
@@ -87,10 +88,10 @@ void error_display(const char* msg, int err_no)
 		NULL, err_no,
 		MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
 		(LPTSTR)&lpMsgBuf, 0, NULL);
-	std::cout << msg;
-	std::wcout << L"����" << lpMsgBuf << std::endl;
+	// std::cout << msg;
+	// std::wcout << L"에러" << lpMsgBuf << std::endl;
 
-	MessageBox(hWnd, lpMsgBuf, L"ERROR", 0);
+	// MessageBox(hWnd, lpMsgBuf, L"ERROR", 0);
 	LocalFree(lpMsgBuf);
 	// while (true);
 }
@@ -133,61 +134,59 @@ void ProcessPacket(int ci, unsigned char packet[])
 	{
 		S2C_LoginResult* p = reinterpret_cast<S2C_LoginResult*>(packet);
 		if (p->success) {
-
-			C2S_Login l_packet;
-			memset(&l_packet, 0, sizeof(l_packet));
-
-			int temp = num_connections;
-			sprintf_s(l_packet.username, "DUMMY_%d", temp);
-			sprintf_s(l_packet.user_id,  "DUMMY_%d", temp);
-			l_packet.size = sizeof(l_packet);
-			l_packet.type = C2S_LOGIN;
-			SendPacket(ci, &l_packet);
+			// 이미 연결 시 C2S_LOGIN을 보냈으므로 여기서 다시 보내면 무한 루프 발생. 생략함.
 		}
 		else {
 			DisconnectClient(ci);
-			//g_window->close();
 		}
+		break;
 	}
-	case S2C_MOVE_PLAYER: {
-		S2C_MovePlayer* move_packet = reinterpret_cast<S2C_MovePlayer*>(packet);
-		if (move_packet->playerId < MAX_CLIENTS) {
-			int my_id = client_map[move_packet->playerId];
-			if (-1 != my_id) {
-				g_clients[my_id].x = move_packet->x;
-				g_clients[my_id].y = move_packet->y;
-			}
-			if (ci == my_id) {
-				if (0 != move_packet->move_time) {
-					auto d_ms = duration_cast<milliseconds>(high_resolution_clock::now().time_since_epoch()).count() - move_packet->move_time;
-
-					if (global_delay < d_ms) global_delay++;
-					else if (global_delay > d_ms) global_delay--;
-				}
-			}
-		}
-	}
-					   break;
-	case S2C_ADD_PLAYER: break;
-	case S2C_REMOVE_PLAYER: break;
 	case S2C_AVATAR_INFO:
 	{
+		// 스폰 성공 → 연결 완료로 처리
 		g_clients[ci].connected = true;
-		active_clients++;
-		S2C_AvatarInfo* login_packet = reinterpret_cast<S2C_AvatarInfo*>(packet);
-		int my_id = ci;
-		client_map[login_packet->playerId] = my_id;
-		g_clients[my_id].id = login_packet->playerId;
-		g_clients[my_id].x = login_packet->x;
-		g_clients[my_id].y = login_packet->y;
-
-		//cs_packet_teleport t_packet;
-		//t_packet.size = sizeof(t_packet);
-		//t_packet.type = CS_TELEPORT;
-		//SendPacket(my_id, &t_packet);
+		++active_clients;
+		S2C_AvatarInfo* info = reinterpret_cast<S2C_AvatarInfo*>(packet);
+		{
+			lock_guard<mutex> lock(client_map_mutex);
+			client_map[info->playerId] = ci; // server player id -> local index
+		}
+		g_clients[ci].id = info->playerId;
+		g_clients[ci].x  = info->x;
+		g_clients[ci].y  = info->y;
+		break;
 	}
-	break;
-	default: break; // 스트레스 테스트: 알 수 없는 패킷 무시
+	case S2C_MOVE_OBJECT:
+	{
+		S2C_MoveObject* move_packet = reinterpret_cast<S2C_MoveObject*>(packet);
+		
+		int my_id = -1;
+		{
+			lock_guard<mutex> lock(client_map_mutex);
+			if (client_map.count(move_packet->object_id) > 0) {
+				my_id = client_map[move_packet->object_id];
+			}
+		}
+		
+		// client_map에 없는 object_id는 다른 플레이어 이동이므로 무시
+		if (my_id == -1) break;
+		if (my_id < 0 || my_id >= MAX_CLIENTS) break;
+
+		// 내 캐릭터 이동이면 RTT 측정
+		if (my_id == ci && move_packet->move_time != 0) {
+			long long now_ms = duration_cast<milliseconds>(high_resolution_clock::now().time_since_epoch()).count();
+			long long d_ms = now_ms - (long long)move_packet->move_time;
+			if (d_ms > 0 && d_ms < 10000) { // 비정상 값 필터링
+				if (global_delay < d_ms) global_delay++;
+				else if (global_delay > d_ms) global_delay--;
+			}
+		}
+		g_clients[my_id].x = move_packet->x;
+		g_clients[my_id].y = move_packet->y;
+		break;
+	}
+	// 나머지 패킷(ADD_OBJECT, REMOVE_OBJECT, STATUS_CHANGE 등)은 무시
+	default: break;
 	}
 }
 
@@ -273,13 +272,13 @@ void Worker_Thread()
 
 constexpr int DELAY_LIMIT = 100;
 constexpr int DELAY_LIMIT2 = 150;
-constexpr int ACCEPT_DELY = 50;
+constexpr int ACCEPT_DELY = 30;
 
 void Adjust_Number_Of_Client()
 {
 	static int delay_multiplier = 1;
-	static int max_limit = MAXINT;
-	static bool increasing = true;
+	static int max_limit = MAX_TEST;
+	static auto last_limit_increase = high_resolution_clock::now();
 
 	if (active_clients >= MAX_TEST) return;
 	if (num_connections >= MAX_CLIENTS) return;
@@ -289,25 +288,30 @@ void Adjust_Number_Of_Client()
 
 	int t_delay = global_delay;
 	if (DELAY_LIMIT2 < t_delay) {
-		if (true == increasing) {
-			max_limit = active_clients;
-			increasing = false;
-		}
+		// 딜레이 한계 돌파: 상한선을 현재 인원의 95%로 동적 하향 조정
+		max_limit = active_clients - (active_clients / 20);
 		if (100 > active_clients) return;
 		if (ACCEPT_DELY * 10 > duration_cast<milliseconds>(duration).count()) return;
 		last_connect_time = high_resolution_clock::now();
 		DisconnectClient(client_to_close);
-		client_to_close++;
+		++client_to_close;
 		return;
 	}
-	else
-		if (DELAY_LIMIT < t_delay) {
-			delay_multiplier = 10;
-			return;
+	else if (DELAY_LIMIT < t_delay) {
+		delay_multiplier = 10;
+		// 주의 구간: 상한선을 넘으면 추가 접속 금지
+		if (active_clients >= max_limit) return;
+	}
+	else {
+		delay_multiplier = 1;
+		// 안정 구간(<100ms): 서버가 여유가 있으므로 상한선을 초당 50명씩 서서히 올려 다시 한계 돌파 시도
+		auto limit_duration = high_resolution_clock::now() - last_limit_increase;
+		if (duration_cast<milliseconds>(limit_duration).count() > 20) {
+			max_limit++;
+			last_limit_increase = high_resolution_clock::now();
 		}
-	if (max_limit - (max_limit / 20) < active_clients) return;
-
-	increasing = true;
+		if (active_clients >= max_limit) return;
+	}
 	last_connect_time = high_resolution_clock::now();
 	g_clients[num_connections].client_socket = WSASocketW(AF_INET, SOCK_STREAM, IPPROTO_TCP, NULL, 0, WSA_FLAG_OVERLAPPED);
 
@@ -344,6 +348,18 @@ void Adjust_Number_Of_Client()
 			goto fail_to_connect;
 		}
 	}
+
+	// 연결 직후 즉시 C2S_LOGIN 전송 (서버는 먼저 보내지 않음)
+	{
+		C2S_Login l_packet;
+		memset(&l_packet, 0, sizeof(l_packet));
+		sprintf_s(l_packet.username, "DUMMY_%d", (int)num_connections);
+		sprintf_s(l_packet.user_id,  "DUMMY_%d", (int)num_connections);
+		l_packet.size = sizeof(l_packet);
+		l_packet.type = C2S_LOGIN;
+		SendPacket(num_connections, &l_packet);
+	}
+
 	num_connections++;
 fail_to_connect:
 	return;
@@ -362,12 +378,15 @@ void Test_Thread()
 			C2S_Move my_packet;
 			my_packet.size = sizeof(my_packet);
 			my_packet.type = C2S_MOVE;
+			int dx = 0; int dy = 0;
 			switch (rand() % 4) {
-			case 0: my_packet.dir = LEFT; break;
-			case 1: my_packet.dir = RIGHT; break;
-			case 2: my_packet.dir = UP; break;
-			case 3: my_packet.dir = DOWN; break;
+			case 0: dx = -1; break;
+			case 1: dx = 1; break;
+			case 2: dy = -1; break;
+			case 3: dy = 1; break;
 			}
+			my_packet.x = dx;
+			my_packet.y = dy;
 			my_packet.move_time = static_cast<unsigned>(duration_cast<milliseconds>(high_resolution_clock::now().time_since_epoch()).count());
 			SendPacket(i, &my_packet);
 		}
@@ -381,7 +400,7 @@ void InitializeNetwork()
 		cl.id = INVALID_ID;
 	}
 
-	for (auto& cl : client_map) cl = -1;
+	client_map.clear();
 	num_connections = 0;
 	last_connect_time = high_resolution_clock::now();
 

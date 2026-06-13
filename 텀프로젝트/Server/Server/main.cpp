@@ -1,4 +1,4 @@
-#define NOMINMAX
+﻿#define NOMINMAX
 #include <algorithm>
 #include <iostream>
 #include <WS2tcpip.h>
@@ -109,8 +109,7 @@ public:
 	SOCKET			accept_socket;
 
 	// 배칭용 멤버 추가
-	std::vector<WSABUF> wsa_bufs;
-	std::vector<std::vector<char>> pending_data;
+	std::vector<char> pending_flat_data;
 	event_type event_data;
 	DBTask db_task;
 
@@ -126,14 +125,12 @@ public:
 		wsabuffer.buf = buff;
 		wsabuffer.len = BUF_SIZE;
 	}
-	// 배칭용 생성자
-	EXP_OVER(std::vector<std::vector<char>>&& data) : type(io_type::send), pending_data(std::move(data))
+	// 배칭용 생성자 (Flat Buffer)
+	EXP_OVER(std::vector<char>&& data) : type(io_type::send), pending_flat_data(std::move(data))
 	{
 		ZeroMemory(&over, sizeof(over));
-		wsa_bufs.reserve(pending_data.size());
-		for (auto& d : pending_data) {
-			wsa_bufs.push_back({ static_cast<ULONG>(d.size()), d.data() });
-		}
+		wsabuffer.buf = pending_flat_data.data();
+		wsabuffer.len = static_cast<ULONG>(pending_flat_data.size());
 	}
 	EXP_OVER(char* packet)
 	{
@@ -450,9 +447,9 @@ public:
 	std::unordered_set<int> visible_players; // 현재 보이는 플레이어 ID 목록
 	std::mutex visible_players_mutex; // 보이는 플레이어 목록 보호용 뮤텍스
 
-	// 송신 배칭용 멤버 추가
+	// 송신 비동기 제어용 추가
 	std::mutex send_mtx;
-	std::vector<std::vector<char>> send_queue;
+	std::vector<char> send_queue;
 	std::atomic<bool> is_sending{ false };
 
 	SESSION()
@@ -506,7 +503,7 @@ public:
 	{
 		{
 			std::lock_guard<std::mutex> lock(send_mtx);
-			send_queue.emplace_back(packet, packet + size);
+			send_queue.insert(send_queue.end(), packet, packet + size);
 		}
 
 		bool expected = false;
@@ -517,7 +514,7 @@ public:
 
 	void flush_send()
 	{
-		std::vector<std::vector<char>> sending_data;
+		std::vector<char> sending_data;
 		{
 			std::lock_guard<std::mutex> lock(send_mtx);
 			if (send_queue.empty()) {
@@ -529,7 +526,7 @@ public:
 
 		EXP_OVER* send_over = new EXP_OVER(std::move(sending_data));
 		DWORD send_bytes;
-		int ret = WSASend(client_, send_over->wsa_bufs.data(), static_cast<DWORD>(send_over->wsa_bufs.size()), &send_bytes, 0, &send_over->over, NULL);
+		int ret = WSASend(client_, &send_over->wsabuffer, 1, &send_bytes, 0, &send_over->over, NULL);
 
 		if (ret == SOCKET_ERROR && WSAGetLastError() != WSA_IO_PENDING) {
 			delete send_over;
@@ -621,7 +618,8 @@ public:
 	void save_to_db()
 	{
 		if (!player_) return;
-		// 더미 클라이언트는 DB 저장 생략
+		// 더미 클라이언트 또는 아직 로그인 미완료 세션은 DB 저장 생략
+		if (userId_[0] == '\0') return;
 		if (strncmp(userId_, "DUMMY_", 6) == 0) return;
 		
 		DBTask task;
@@ -691,6 +689,8 @@ tbb::concurrent_unordered_map<int, std::atomic<std::shared_ptr<SESSION>>> client
 void player_take_damage(std::shared_ptr<SESSION> s, int actual_dmg)
 {
 	if (!s || !s->player_) return;
+	// 더미 클라이언트는 데미지 무시
+	if (strncmp(s->userId_, "DUMMY_", 6) == 0) return;
 	
 	if (s->player_->_state.load() == PlayerState::DEAD) return;
 
@@ -818,6 +818,8 @@ public:
 			if (is_npc_id(pid)) continue;
 			std::shared_ptr<SESSION> s = clients[pid].load();
 			if (!s || s->state_ != client_state::playing) continue;
+			
+			//if (strncmp(s->userId_, "DUMMY_", 6) == 0) continue; // 더미 클라이언트는 어그로 대상에서 제외
 			int d = std::abs(x_ - s->player_->x_) + std::abs(y_ - s->player_->y_);
 			if (d < best_dist) { best_dist = d; best_id = pid; }
 		}
@@ -1234,8 +1236,6 @@ bool SESSION::proccess_packet(unsigned char* buff)
 			} while (!is_passable(rx, ry));
 			player_->x_ = static_cast<int16_t>(rx);
 			player_->y_ = static_cast<int16_t>(ry);
-			player_->initial_x_ = player_->x_;
-			player_->initial_y_ = player_->y_;
 
 			send_login_success();
 			sector.add_object(id_, player_->x_, player_->y_);
@@ -1243,7 +1243,7 @@ bool SESSION::proccess_packet(unsigned char* buff)
 			send_already_spawn_players();
 			broadcast_new_player(id_);
 			state_ = client_state::playing;
-			std::cout << "[DUMMY] " << p->user_id << " spawned at (" << rx << ", " << ry << ")\n";
+			//std::cout << "[DUMMY] " << p->user_id << " spawned at (" << rx << ", " << ry << ")\n";
 			break;
 		}
 
@@ -2532,9 +2532,13 @@ void send_login_fail(SOCKET client, const char* text)
 }
 void client_disconnect(int client_id)
 {
+	// 동시성 제어: 이미 nullptr로 바뀌었다면 다른 스레드에서 해제 중이므로 무시
+	std::shared_ptr<SESSION> cl = clients[client_id].exchange(nullptr);
+	if (cl == nullptr) return; 
+
 	std::cout << "client[" << client_id << "] Disconnected.\n";
-	std::shared_ptr<SESSION> cl = clients[client_id].load();
-	if (nullptr != cl && cl->player_) {
+	
+	if (cl->player_) {
 		cl->state_ = client_state::logout;
 		
 		// 간편하게 DB 저장 호출!
@@ -2545,7 +2549,6 @@ void client_disconnect(int client_id)
 		closesocket(cl->client_);
 		cl->client_ = INVALID_SOCKET;
 	}
-	clients[client_id].store(nullptr);
 }
 void npc_initialize()
 {
@@ -3116,9 +3119,9 @@ void worker_thread()
 							add_pkt.exp       = npc->_exp;
 							add_pkt.level     = npc->_level;
 							add_pkt.head_tier = 0;
-						add_pkt.chest_tier = 0;
-						add_pkt.legs_tier = 0;
-						add_pkt.boots_tier = 0;
+							add_pkt.chest_tier = 0;
+							add_pkt.legs_tier = 0;
+							add_pkt.boots_tier = 0;
 							add_pkt.weapon_tier = 0;
 							add_pkt.dir_x = 0;
 							add_pkt.dir_y = -1;

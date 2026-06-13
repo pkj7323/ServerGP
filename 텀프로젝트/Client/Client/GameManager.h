@@ -14,6 +14,14 @@ struct AttackEffect {
 	std::chrono::time_point<std::chrono::steady_clock> start_time;
 };
 
+struct DamageText {
+	int object_id;
+	int damage;
+	std::chrono::time_point<std::chrono::steady_clock> start_time;
+	float offset_x;
+	float offset_y;
+};
+
 class GameManager : public Singleton<GameManager>
 {
 	friend class Singleton<GameManager>;
@@ -41,6 +49,7 @@ public:
 
 	// 맵 데이터 로드
 	void load_map();
+	void add_attack_effect(int id, char tier, char type, short x, short y, short dx, short dy);
 
 	// 충돌 체크
 	bool can_move(int x, int y) {
@@ -55,10 +64,10 @@ public:
 	}
 
 	// -- UI & Chat States --
-	std::vector<std::wstring>& chat_logs() { return _chatLogs; }
+	std::vector<std::wstring>& chat_logs() { return _chat_logs; }
 	void add_chat_log(const std::wstring& msg) { 
-		_chatLogs.push_back(msg); 
-		if (_chatLogs.size() > 10) _chatLogs.erase(_chatLogs.begin());
+		_chat_logs.push_back(msg); 
+		if (_chat_logs.size() > 10) _chat_logs.erase(_chat_logs.begin());
 	}
 	
 	bool is_chatting() const { return _isChatting; }
@@ -96,7 +105,10 @@ public:
 
 	std::unordered_map<int, int>& my_inventory() { return _myInventory; }
 
-	std::vector<AttackEffect>& attack_effects() { return _attackEffects; }
+	std::vector<AttackEffect>& attack_effects() { return _attack_effects; }
+
+	void add_damage_text(int obj_id, int damage);
+	std::vector<DamageText>& damage_texts() { return _damage_texts; }
 
 	void start_potion_cooldown() { _last_potion_use = std::chrono::steady_clock::now(); }
 	void start_skill_cooldown() { _last_skill_use = std::chrono::steady_clock::now(); _buff_end_time = _last_skill_use + std::chrono::seconds(5); }
@@ -108,20 +120,23 @@ public:
 	std::chrono::time_point<std::chrono::steady_clock> buff_end_time() const { return _buff_end_time; }
 
 private:
-	std::vector<AttackEffect> _attackEffects;
-	std::vector<std::wstring> _chatLogs;
+	std::atomic<bool> _isRunning;
+
+	int _myId;
+	std::string _username;
+	std::string _user_id;
+	std::unordered_map<int, Object> _players;
+	std::unordered_map<int, Object> _npcs;
+	std::vector<std::wstring> _chat_logs;
+	std::vector<AttackEffect> _attack_effects;
+	std::vector<DamageText> _damage_texts;
+
 	bool _isChatting = false;
 	std::wstring _currentChatInput = L"";
 	bool _showInventory = false;
 	bool _showSkillTree = false;
 	int _myGold = 0;
 	std::unordered_map<int, int> _myInventory;
-	std::unordered_map<int, Object> _players;
-	std::unordered_map<int, Object> _npcs;
-	int _myId;
-	std::string _username;
-	std::string _user_id;
-	bool _isRunning;
 
 	std::chrono::time_point<std::chrono::steady_clock> _last_potion_use;
 	std::chrono::time_point<std::chrono::steady_clock> _last_skill_use;
