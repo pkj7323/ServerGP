@@ -51,7 +51,7 @@ end
 
 function on_timer(ctx)
     if ctx.target_id == -1 or ctx.dist > 20 then
-        return { action = ACTION_IDLE, new_state = STATE_IDLE, delay_ms = 1000 }
+        return { action = ACTION_IDLE, new_state = STATE_IDLE, delay_ms = 500 }
     end
 
     -- 너무 가까우면 도주
@@ -61,7 +61,7 @@ function on_timer(ctx)
             action    = ACTION_MOVE,
             dx        = dx,
             dy        = dy,
-            new_state = STATE_AGGRO, delay_ms = 1000
+            new_state = STATE_AGGRO, delay_ms = 500
         }
     end
 
@@ -82,18 +82,18 @@ function on_timer(ctx)
             action    = ACTION_MOVE,
             dx        = dx,
             dy        = dy,
-            new_state = STATE_AGGRO, delay_ms = 1000
+            new_state = STATE_AGGRO, delay_ms = 500
         }
     end
 
     -- 적정 거리 유지 (제자리 대기)
-    return { action = ACTION_IDLE, new_state = STATE_AGGRO, delay_ms = 1000 }
+    return { action = ACTION_IDLE, new_state = STATE_AGGRO, delay_ms = 500 }
 end
 
 function on_hit(ctx, attacker_id, damage)
-    return { action = ACTION_IDLE, new_state = STATE_AGGRO, delay_ms = 1000 }
+    return { action = ACTION_IDLE, new_state = STATE_AGGRO, delay_ms = 500 }
 end
 
 function on_spawn(ctx)
-    return { action = ACTION_IDLE, new_state = STATE_IDLE, delay_ms = 1000 }
+    return { action = ACTION_IDLE, new_state = STATE_IDLE, delay_ms = 500 }
 end

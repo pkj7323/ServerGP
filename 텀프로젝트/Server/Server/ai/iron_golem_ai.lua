@@ -47,7 +47,7 @@ function on_timer(ctx)
             action    = ACTION_MOVE,
             dx        = dx,
             dy        = dy,
-            new_state = STATE_AGGRO, delay_ms = 1000
+            new_state = STATE_AGGRO, delay_ms = 500
         }
     end
 
@@ -58,7 +58,7 @@ function on_timer(ctx)
             action    = ACTION_MOVE,
             dx        = dx,
             dy        = dy,
-            new_state = STATE_PATROL, delay_ms = 1000
+            new_state = STATE_PATROL, delay_ms = 500
         }
     end
 
@@ -75,7 +75,7 @@ end
 
 function on_hit(ctx, attacker_id, damage)
     -- 피격 즉시 AGGRO
-    return { action = ACTION_IDLE, new_state = STATE_AGGRO, delay_ms = 1000 }
+    return { action = ACTION_IDLE, new_state = STATE_AGGRO, delay_ms = 500 }
 end
 
 function on_spawn(ctx)

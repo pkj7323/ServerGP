@@ -4,7 +4,7 @@
 function on_timer(ctx)
     local ZONE_DAMAGE = 8
     -- 장판은 계속해서 ZONE_DAMAGE 액션을 수행하며, C++쪽에서 체력을 깎고 사라집니다.
-    return { action = ZONE_DAMAGE, delay_ms = 1000 }
+    return { action = ZONE_DAMAGE, delay_ms = 500 }
 end
 
 function on_hit(ctx, attacker_id, damage)
@@ -12,5 +12,5 @@ function on_hit(ctx, attacker_id, damage)
 end
 
 function on_spawn(ctx)
-    return { action = 0, delay_ms = 1000 }
+    return { action = 0, delay_ms = 500 }
 end

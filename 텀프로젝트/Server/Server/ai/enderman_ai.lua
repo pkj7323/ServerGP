@@ -31,7 +31,7 @@ end
 function on_timer(ctx)
     -- IDLE 상태에서 플레이어 범위 밖 → 계속 IDLE
     if ctx.target_id == -1 then
-        return { action = ACTION_IDLE, new_state = STATE_IDLE, delay_ms = 1000 }
+        return { action = ACTION_IDLE, new_state = STATE_IDLE, delay_ms = 500 }
     end
 
     -- 플레이어가 AGGRO_RANGE 이내: AGGRO 전환
@@ -51,22 +51,22 @@ function on_timer(ctx)
             action    = ACTION_MOVE,
             dx        = dx * TELEPORT_DIST,
             dy        = dy * TELEPORT_DIST,
-            new_state = STATE_AGGRO, delay_ms = 1000
+            new_state = STATE_AGGRO, delay_ms = 500
         }
     end
 
     -- 멀면 그냥 IDLE
-    return { action = ACTION_IDLE, new_state = STATE_IDLE, delay_ms = 1000 }
+    return { action = ACTION_IDLE, new_state = STATE_IDLE, delay_ms = 500 }
 end
 
 function on_hit(ctx, attacker_id, damage)
     -- 피격 즉시 AGGRO
     return {
         action    = ACTION_IDLE,
-        new_state = STATE_AGGRO, delay_ms = 1000
+        new_state = STATE_AGGRO, delay_ms = 500
     }
 end
 
 function on_spawn(ctx)
-    return { action = ACTION_IDLE, new_state = STATE_IDLE, delay_ms = 1000 }
+    return { action = ACTION_IDLE, new_state = STATE_IDLE, delay_ms = 500 }
 end

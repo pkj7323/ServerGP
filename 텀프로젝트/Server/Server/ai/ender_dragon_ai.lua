@@ -26,7 +26,7 @@ function on_timer(ctx)
 
     -- 타겟 확인
     if ctx.target_id < 0 or ctx.dist > 15 then
-        return { action = MOVE, dx = math.random(-1, 1), dy = math.random(-1, 1), delay_ms = 1000 }
+        return { action = MOVE, dx = math.random(-1, 1), dy = math.random(-1, 1), delay_ms = 500 }
     end
 
     -- 페이즈별 행동 결정
@@ -35,7 +35,7 @@ function on_timer(ctx)
         if ctx.dist <= 1 then
             local r = math.random(1, 100)
             if r <= 60 then
-                return { action = MELEE, target_id = ctx.target_id, delay_ms = 1000 }
+                return { action = MELEE, target_id = ctx.target_id, delay_ms = 500 }
             else
                 return { action = AOE, delay_ms = 1500 }
             end
@@ -44,7 +44,7 @@ function on_timer(ctx)
             if ctx.dist <= 3 and math.random(1, 100) <= 30 then
                 return { action = AOE, delay_ms = 1500 }
             else
-                return { action = MOVE, dx = ctx.target_x - ctx.self_x, dy = ctx.target_y - ctx.self_y, delay_ms = 1000 }
+                return { action = MOVE, dx = ctx.target_x - ctx.self_x, dy = ctx.target_y - ctx.self_y, delay_ms = 500 }
             end
         end
     else
@@ -71,5 +71,5 @@ function on_hit(ctx, attacker_id, damage)
 end
 
 function on_spawn(ctx)
-    return { action = 0, new_state = 2, delay_ms = 1000 }
+    return { action = 0, new_state = 2, delay_ms = 500 }
 end

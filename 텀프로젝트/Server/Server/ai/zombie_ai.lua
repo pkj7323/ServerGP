@@ -32,7 +32,7 @@ end
 function on_timer(ctx)
     -- 플레이어가 없으면 IDLE
     if ctx.target_id == -1 or ctx.dist > 20 then
-        return { action = ACTION_IDLE, new_state = STATE_IDLE, delay_ms = 1000 }
+        return { action = ACTION_IDLE, new_state = STATE_IDLE, delay_ms = 500 }
     end
 
     -- 인접(거리 1)이면 근접 공격
@@ -51,7 +51,7 @@ function on_timer(ctx)
         action    = ACTION_MOVE,
         dx        = dx,
         dy        = dy,
-        new_state = STATE_AGGRO, delay_ms = 1000
+        new_state = STATE_AGGRO, delay_ms = 500
     }
 end
 
@@ -60,12 +60,12 @@ end
 -- ─────────────────────────────────────────────────────────────────────────────
 function on_hit(ctx, attacker_id, damage)
     -- 피격 즉시 AGGRO로 전환 (이미 AGGRO면 유지)
-    return { action = ACTION_IDLE, new_state = STATE_AGGRO, delay_ms = 1000 }
+    return { action = ACTION_IDLE, new_state = STATE_AGGRO, delay_ms = 500 }
 end
 
 -- ─────────────────────────────────────────────────────────────────────────────
 -- on_spawn(ctx): 스폰 시 초기화
 -- ─────────────────────────────────────────────────────────────────────────────
 function on_spawn(ctx)
-    return { action = ACTION_IDLE, new_state = STATE_IDLE, delay_ms = 1000 }
+    return { action = ACTION_IDLE, new_state = STATE_IDLE, delay_ms = 500 }
 end

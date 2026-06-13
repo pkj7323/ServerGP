@@ -1,4 +1,4 @@
-﻿#define NOMINMAX
+#define NOMINMAX
 #include <algorithm>
 #include <iostream>
 #include <WS2tcpip.h>
@@ -53,8 +53,8 @@ void error_display(const std::wstring& msg, int err_no)
 constexpr int BUF_SIZE = 1024;
 constexpr int VIEW_RANGE = 5;
 constexpr int SECTOR_SIZE = 10;
-constexpr int MOVE_COOL_TIME = 3000; // NPC 이동 쿨타임 (밀리초)
-constexpr int MOVE_COOL_TIME_VARIATION = 1000;
+constexpr int MOVE_COOL_TIME = 500; // NPC 이동 쿨타임 (밀리초)
+constexpr int MOVE_COOL_TIME_VARIATION = 0;
 
 std::atomic<int> player_index = 1;
 std::atomic<int> npc_index = 20000;
@@ -347,8 +347,10 @@ public:
 	std::chrono::time_point<std::chrono::system_clock> skill_cooldown_end_time_;
 	std::chrono::time_point<std::chrono::system_clock> ender_pearl_cooldown_end_time_;
 	std::chrono::time_point<std::chrono::system_clock> buff_end_time_;
+	std::chrono::time_point<std::chrono::system_clock> last_rubberband_time_;
 
 	Player() : BaseObject(), last_move_timestamp_(std::chrono::system_clock::now()),
+			   last_rubberband_time_(std::chrono::system_clock::now()),
 			   last_attack_time_(std::chrono::system_clock::now()),
 			   potion_cooldown_end_time_(std::chrono::system_clock::now()),
 			   skill_cooldown_end_time_(std::chrono::system_clock::now()),
@@ -607,7 +609,7 @@ public:
 	void send_move_packet(int mover, uint32_t timestamp);
 	void send_add_player(int player_id);
 	bool is_visible(int x, int y, int npc_type = 0) {
-		if (npc_type == 11) return true; // NPC_ENDER_DRAGON
+		//if (npc_type == 11) return true; // NPC_ENDER_DRAGON
 		return abs(x - player_->x_) <= VIEW_RANGE && abs(y - player_->y_) <= VIEW_RANGE;
 	}
 	void send_already_spawn_players();
@@ -783,6 +785,7 @@ public:
 				if (!is_npc_id(pid)) {
 					std::shared_ptr<SESSION> s = clients[pid].load();
 					if (s && s->state_ == client_state::playing) {
+						if (!s->is_visible(x_, y_, _npcType)) continue;
 						s->do_send(stat.size, reinterpret_cast<char*>(&stat));
 					}
 				}
@@ -829,8 +832,10 @@ public:
 		for (auto pid : sector.get_objects_nearby_sector(x_, y_)) {
 			if (is_npc_id(pid)) continue;
 			std::shared_ptr<SESSION> s = clients[pid].load();
-			if (s && s->state_ == client_state::playing)
+			if (s && s->state_ == client_state::playing) {
+				if (!s->is_visible(x_, y_, _npcType)) continue;
 				s->do_send(pkt.size, reinterpret_cast<char*>(&pkt));
+			}
 		}
 	}
 
@@ -843,6 +848,7 @@ public:
 			if (is_npc_id(pid)) continue;
 			std::shared_ptr<SESSION> s = clients[pid].load();
 			if (!s || s->state_ != client_state::playing) continue;
+			if (!s->is_visible(x_, y_, _npcType)) continue;
 			old_vl.insert(pid);
 		}
 
@@ -1098,6 +1104,7 @@ public:
 			if (is_npc_id(pid)) continue;
 			std::shared_ptr<SESSION> s = clients[pid].load();
 			if (!s || s->state_ != client_state::playing) continue;
+			if (!s->is_visible(x_, y_, _npcType)) continue;
 			new_vl.insert(pid);
 		}
 
@@ -1117,7 +1124,7 @@ public:
 					add_npc.npc_state = static_cast<char>(_aiState);
 					s->do_send(add_npc.size, reinterpret_cast<char*>(&add_npc));
 				}
-			} else {
+			} else if (old_x != x_ || old_y != y_) { // 델타 체킹: 실제로 이동했을 때만 전송
 				std::shared_ptr<SESSION> s = clients[pid].load();
 				if (s && s->state_ == client_state::playing)
 					s->send_move_packet(id_, MOVE_COOL_TIME);
@@ -1161,7 +1168,7 @@ public:
 
 		event_type ev;
 		ev.obj_id = id_;
-		ev.wakeup_time = std::chrono::system_clock::now() + std::chrono::milliseconds(MOVE_COOL_TIME + (rand() % MOVE_COOL_TIME_VARIATION));
+		ev.wakeup_time = std::chrono::system_clock::now() + std::chrono::milliseconds(MOVE_COOL_TIME);
 		ev.event_id = EVENT_MOVE;
 		ev.target_id = -1;
 		timer_queue.push(ev);
@@ -1267,16 +1274,20 @@ bool SESSION::proccess_packet(unsigned char* buff)
 		
 		if (elapsed < g_player_config.move_cooldown_ms) {
 			// 이동 무시하고 현재 서버 기준 올바른 좌표를 클라로 다시 보내서 위치 보정(고무줄 현상 처리)
-			S2C_MoveObject res_pkt;
-			res_pkt.size = sizeof(res_pkt);
-			res_pkt.type = S2C_MOVE_OBJECT;
-			res_pkt.object_id = id_;
-			res_pkt.x = player_->x_;
-			res_pkt.y = player_->y_;
-			res_pkt.dir_x = player_->_dir_x;
-			res_pkt.dir_y = player_->_dir_y;
-			res_pkt.move_time = 0;
-			do_send(res_pkt.size, reinterpret_cast<char*>(&res_pkt));
+			auto rb_elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - player_->last_rubberband_time_).count();
+			if (rb_elapsed >= 500) {
+				player_->last_rubberband_time_ = now;
+				S2C_MoveObject res_pkt;
+				res_pkt.size = sizeof(res_pkt);
+				res_pkt.type = S2C_MOVE_OBJECT;
+				res_pkt.object_id = id_;
+				res_pkt.x = player_->x_;
+				res_pkt.y = player_->y_;
+				res_pkt.dir_x = player_->_dir_x;
+				res_pkt.dir_y = player_->_dir_y;
+				res_pkt.move_time = 0;
+				do_send(res_pkt.size, reinterpret_cast<char*>(&res_pkt));
+			}
 			break;
 		}
 		player_->last_move_timestamp_ = now;
@@ -1309,16 +1320,21 @@ bool SESSION::proccess_packet(unsigned char* buff)
 		else
 		{
 			// 충돌: 강제 위치 복원(고무줄 현상)
-			S2C_MoveObject res_pkt;
-			res_pkt.size = sizeof(res_pkt);
-			res_pkt.type = S2C_MOVE_OBJECT;
-			res_pkt.object_id = id_;
-			res_pkt.x = player_->x_;
-			res_pkt.y = player_->y_;
-			res_pkt.dir_x = player_->_dir_x;
-			res_pkt.dir_y = player_->_dir_y;
-			res_pkt.move_time = 0;
-			do_send(res_pkt.size, reinterpret_cast<char*>(&res_pkt));
+			auto now = std::chrono::system_clock::now();
+			auto rb_elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - player_->last_rubberband_time_).count();
+			if (rb_elapsed >= 500) {
+				player_->last_rubberband_time_ = now;
+				S2C_MoveObject res_pkt;
+				res_pkt.size = sizeof(res_pkt);
+				res_pkt.type = S2C_MOVE_OBJECT;
+				res_pkt.object_id = id_;
+				res_pkt.x = player_->x_;
+				res_pkt.y = player_->y_;
+				res_pkt.dir_x = player_->_dir_x;
+				res_pkt.dir_y = player_->_dir_y;
+				res_pkt.move_time = 0;
+				do_send(res_pkt.size, reinterpret_cast<char*>(&res_pkt));
+			}
 		}
 		sector.move_object(id_, old_x, old_y, player_->x_, player_->y_); // 섹터 정보 업데이트
 
@@ -1509,8 +1525,11 @@ bool SESSION::proccess_packet(unsigned char* buff)
 					for (auto pid : nearby) {
 						if (!is_npc_id(pid)) {
 							std::shared_ptr<SESSION> s = clients[pid].load();
-							if (s && s->state_ == client_state::playing)
-								s->do_send(move_packet.size, reinterpret_cast<char*>(&move_packet));
+							if (s && s->state_ == client_state::playing) {
+								if (s->is_visible(player_->x_, player_->y_)) {
+									s->do_send(move_packet.size, reinterpret_cast<char*>(&move_packet));
+								}
+							}
 						}
 					}
 					
@@ -2064,7 +2083,11 @@ bool SESSION::proccess_packet(unsigned char* buff)
 							for (auto pid : nearby) {
 								if (is_npc_id(pid) || pid == id_) continue;
 								auto s = clients[pid].load();
-								if (s && s->state_ == client_state::playing) s->do_send(stat_change.size, reinterpret_cast<char*>(&stat_change));
+								if (s && s->state_ == client_state::playing) {
+									if (s->is_visible(player_->x_, player_->y_)) {
+										s->do_send(stat_change.size, reinterpret_cast<char*>(&stat_change));
+									}
+								}
 							}
 						}
 						
@@ -2734,6 +2757,11 @@ void worker_thread()
 		case io_type::accept:
 		{
 			int current_id = make_player_id(player_index++);
+			
+			// 핑 개선 및 네트워크 병목 완화를 위한 Nagle 알고리즘 비활성화
+			int optval = 1;
+			setsockopt(o->accept_socket, IPPROTO_TCP, TCP_NODELAY, (char*)&optval, sizeof(optval));
+
 			CreateIoCompletionPort((HANDLE)o->accept_socket, h_iocp, current_id, 0);
 			std::shared_ptr<SESSION> new_session = std::make_shared<SESSION>();
 			new_session->id_ = current_id;
@@ -2824,8 +2852,11 @@ void worker_thread()
 				for (auto pid : nearby) {
 					if (is_npc_id(pid)) continue;
 					std::shared_ptr<SESSION> s = clients[pid].load();
-					if (s && s->state_ == client_state::playing)
-						s->do_send(rm_pkt.size, reinterpret_cast<char*>(&rm_pkt));
+					if (s && s->state_ == client_state::playing) {
+						if (s->is_visible(npc->x_, npc->y_, npc->_npcType)) {
+							s->do_send(rm_pkt.size, reinterpret_cast<char*>(&rm_pkt));
+						}
+					}
 				}
 				sector.remove_object(npc->id_, npc->x_, npc->y_);
 				if (npc->_npcType != NPC_FIRE_ZONE) {
@@ -2940,6 +2971,13 @@ void worker_thread()
 				stat.boots_tier = 0;
 				stat.weapon_tier = 0;
 
+				S2C_ChatMessage chat_pkt;
+				chat_pkt.size = sizeof(chat_pkt);
+				chat_pkt.type = S2C_CHAT_MESSAGE;
+				chat_pkt.object_id = ev.obj_id;
+				std::string msg = "Fire aspect - " + std::to_string(ev.attack_power);
+				strncpy_s(chat_pkt.message, msg.c_str(), sizeof(chat_pkt.message));
+
 				auto nearby = sector.get_objects_nearby_sector(npc->x_, npc->y_);
 				for (auto pid : nearby) {
 					if (!is_npc_id(pid)) {
@@ -2947,6 +2985,7 @@ void worker_thread()
 						if (s && s->state_ == client_state::playing) {
 							if (!s->is_visible(npc->x_, npc->y_)) continue;
 							s->do_send(stat.size, reinterpret_cast<char*>(&stat));
+							s->do_send(chat_pkt.size, reinterpret_cast<char*>(&chat_pkt));
 						}
 					}
 				}
@@ -2972,8 +3011,11 @@ void worker_thread()
 					for (auto pid : nearby) {
 						if (is_npc_id(pid)) continue;
 						std::shared_ptr<SESSION> s = clients[pid].load();
-						if (s && s->state_ == client_state::playing)
-							s->do_send(rm_pkt.size, reinterpret_cast<char*>(&rm_pkt));
+						if (s && s->state_ == client_state::playing) {
+							if (s->is_visible(npc->x_, npc->y_, npc->_npcType)) {
+								s->do_send(rm_pkt.size, reinterpret_cast<char*>(&rm_pkt));
+							}
+						}
 					}
 					sector.remove_object(npc->id_, npc->x_, npc->y_);
 					
