@@ -81,7 +81,7 @@ public:
 		_fire_img = Gdiplus::Image::FromFile(L"Resource/fire_0.png");
 		_dragon_fireball_img = Gdiplus::Image::FromFile(L"Resource/dragon_fireball.png");
 		
-		_end_portal_frame_img = (HBITMAP)LoadImage(NULL, L"Resource/end_portal_frame_top.bmp", IMAGE_BITMAP, 0, 0, LR_LOADFROMFILE);
+		_end_portal_frame_img = (HBITMAP)LoadImage(NULL, L"Resource/end_portal_frame.bmp", IMAGE_BITMAP, 0, 0, LR_LOADFROMFILE);
 		_end_portal_img = (HBITMAP)LoadImage(NULL, L"Resource/end_portal.bmp", IMAGE_BITMAP, 0, 0, LR_LOADFROMFILE);
 		_end_stone_img = (HBITMAP)LoadImage(NULL, L"Resource/end_stone.bmp", IMAGE_BITMAP, 0, 0, LR_LOADFROMFILE);
 

@@ -8,7 +8,7 @@
 int g_client_move_cooldown_ms = 50;
 auto g_last_move_time = std::chrono::steady_clock::now();
 void load_client_config() {
-	std::ifstream file("../../Data/player_config.lua");
+	std::ifstream file("Data/player_config.lua");
 	if (!file.is_open()) {
 		std::cout << "[Client] Warning: Could not open player_config.lua, using defaults.\n";
 		return;

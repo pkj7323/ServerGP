@@ -232,32 +232,31 @@ public:
 	}
 
 
-	std::vector<int> get_objects_nearby_sector(int x, int y)
+	std::vector<int> get_objects_nearby_sector(int x, int y, int range = VIEW_RANGE)
 	{
-		int sector_x = x / SECTOR_SIZE;
-		int sector_y = y / SECTOR_SIZE;
 		std::vector<int> nearby_objects;
-
 		nearby_objects.reserve(AVERAGE_EXPECTED_OBJECTS);
 
-		for (int dy = -1; dy <= 1; ++dy)
+		int min_x = std::max(0, x - range);
+		int max_x = std::min(WORLD_WIDTH - 1, x + range);
+		int min_y = std::max(0, y - range);
+		int max_y = std::min(WORLD_HEIGHT - 1, y + range);
+
+		int start_sector_x = min_x / SECTOR_SIZE;
+		int end_sector_x = max_x / SECTOR_SIZE;
+		int start_sector_y = min_y / SECTOR_SIZE;
+		int end_sector_y = max_y / SECTOR_SIZE;
+
+		for (int sy = start_sector_y; sy <= end_sector_y; ++sy)
 		{
-			for (int dx = -1; dx <= 1; ++dx)
+			for (int sx = start_sector_x; sx <= end_sector_x; ++sx)
 			{
-				int check_sector_x = sector_x + dx;
-				int check_sector_y = sector_y + dy;
-
-				if (check_sector_x >= 0 && check_sector_x < WORLD_WIDTH / SECTOR_SIZE &&
-					check_sector_y >= 0 && check_sector_y < WORLD_HEIGHT / SECTOR_SIZE)
-				{
-					std::shared_lock<std::shared_mutex> lock(object_sector[check_sector_y][check_sector_x].mtx);
-
-					nearby_objects.insert(
-						nearby_objects.end(),
-						object_sector[check_sector_y][check_sector_x].objects.begin(),
-						object_sector[check_sector_y][check_sector_x].objects.end()
-					);
-				}
+				std::shared_lock<std::shared_mutex> lock(object_sector[sy][sx].mtx);
+				nearby_objects.insert(
+					nearby_objects.end(),
+					object_sector[sy][sx].objects.begin(),
+					object_sector[sy][sx].objects.end()
+				);
 			}
 		}
 
@@ -1102,8 +1101,9 @@ public:
 		// 7. 섹터 갱신 + 브로드캐스트 오브젝트 패킷
 		sector.move_object(id_, old_x, old_y, x_, y_);
 
+		int check_range = (_npcType == 11) ? VIEW_RANGE + 4 : VIEW_RANGE;
 		std::unordered_set<int> new_vl;
-		for (auto pid : sector.get_objects_nearby_sector(x_, y_)) {
+		for (auto pid : sector.get_objects_nearby_sector(x_, y_, check_range)) {
 			if (is_npc_id(pid)) continue;
 			std::shared_ptr<SESSION> s = clients[pid].load();
 			if (!s || s->state_ != client_state::playing) continue;
@@ -1143,7 +1143,6 @@ public:
 
 		// 7. 결과 반환: 플레이어가 주변에 있으면 action.delay_ms로 타이머 재등록, 없으면 0으로 수면
 		bool has_player_nearby = false;
-		int check_range = (_npcType == 11) ? VIEW_RANGE + 4 : VIEW_RANGE;
 		for (auto pid : new_vl) {
 			std::shared_ptr<SESSION> s = clients[pid].load();
 			if (s && s->state_ == client_state::playing) {
@@ -2679,7 +2678,7 @@ void npc_initialize()
 {
 	// ── 데이터 경로 설정 (실행 파일 기준 ../../Data/) ──────────────────────────
 	// Visual Studio 기본 실행 디렉터리: Server/Server/ 이므로 ../../Data/ 가 됨.
-	const std::string data_dir = "../../Data/";
+	const std::string data_dir = "Data/";
 	const std::string lua_path  = data_dir + "npc_config.lua";
 	const std::string player_lua = data_dir + "player_config.lua";
 	const std::string spawn_path = data_dir + "map_spawn.bin";
