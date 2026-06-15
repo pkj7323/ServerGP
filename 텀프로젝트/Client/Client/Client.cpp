@@ -160,12 +160,25 @@ LRESULT CALLBACK window_proc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lPar
 			}
 			return 0;
 		}
+		if (wParam >= VK_F1 && wParam <= VK_F7) {
+			if ((lParam & 0x40000000) == 0) { // Ignore autorepeat
+				C2S_Cheat p;
+				p.size = sizeof(p);
+				p.type = C2S_CHEAT;
+				p.cheat_type = static_cast<CheatType>(wParam - VK_F1 + 1);
+				NetworkManager::Instance()->send_packet(&p);
+			}
+			return 0;
+		}
 		if (wParam >= '4' && wParam <= '8') {
-			C2S_TestWeapon p;
-			p.size = sizeof(p);
-			p.type = C2S_TEST_WEAPON;
-			p.weapon_tier = static_cast<char>(wParam - '2'); // '3'->1, '4'->2...
-			NetworkManager::Instance()->send_packet(&p);
+			if ((lParam & 0x40000000) == 0) { // Ignore autorepeat
+				C2S_Cheat p;
+				p.size = sizeof(p);
+				p.type = C2S_CHEAT;
+				// TP_IRON_GOLEM is 8. '4' maps to 8, '8' maps to 12.
+				p.cheat_type = static_cast<CheatType>(8 + (wParam - '4'));
+				NetworkManager::Instance()->send_packet(&p);
+			}
 			return 0;
 		}
 		if (wParam == VK_SPACE) {

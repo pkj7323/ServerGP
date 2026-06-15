@@ -279,7 +279,7 @@ static auto last_time = std::chrono::steady_clock::now();
 					graphics.DrawImage(_ender_dragon_full_img, destRect, 0, 0, 250.0f, 250.0f, Gdiplus::UnitPixel);
 					graphics.ResetTransform();
 				} else if (eff_type == 6 && _ender_dragon_full_img) { // Breath (Frame 64)
-					Gdiplus::RectF destRect(bx, by, boss_w, boss_h);
+					Gdiplus::RectF destRect(static_cast<float>(bx), static_cast<float>(by), static_cast<float>(boss_w), static_cast<float>(boss_h));
 					graphics.DrawImage(_ender_dragon_full_img, destRect, 0, 64 * 250.0f, 250.0f, 250.0f, Gdiplus::UnitPixel);
 				} else {
 					if (_ender_dragon_full_img) {
@@ -288,7 +288,7 @@ static auto last_time = std::chrono::steady_clock::now();
 							off_y = (GetTickCount() % 200 < 100) ? 10 : -10;
 						}
 						int frame = (GetTickCount() / 150) % 8; // Use first 8 frames for walking
-						Gdiplus::RectF destRect(bx, by + off_y, boss_w, boss_h);
+						Gdiplus::RectF destRect(static_cast<float>(bx), static_cast<float>(by + off_y), static_cast<float>(boss_w), static_cast<float>(boss_h));
 						graphics.DrawImage(_ender_dragon_full_img, destRect, 0, frame * 250.0f, 250.0f, 250.0f, Gdiplus::UnitPixel);
 					}
 				}

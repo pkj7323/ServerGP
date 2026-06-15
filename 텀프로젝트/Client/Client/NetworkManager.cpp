@@ -179,6 +179,9 @@ void NetworkManager::process_packet(char* ptr)
 		obj.visual_id = p->visual_id;
 		obj.hp = p->hp; obj.max_hp = p->max_hp;
 		obj.npc_state = p->npc_state;
+		if (p->is_burning) {
+			obj.fire_end_time = std::chrono::steady_clock::now() + std::chrono::milliseconds(1200);
+		}
 		gm->npcs().emplace(p->object_id, obj);
 		break;
 	}
@@ -238,9 +241,7 @@ void NetworkManager::process_packet(char* ptr)
 
 			gm->npcs()[p->object_id].chat_msg = wmsg;
 			gm->npcs()[p->object_id].chat_time = std::chrono::steady_clock::now();
-			if (wmsg.find(L"Fire aspect -") == 0) {
-				gm->npcs()[p->object_id].fire_end_time = std::chrono::steady_clock::now() + std::chrono::milliseconds(1200);
-			}
+
 		}
 		else if (gm->players().contains(p->object_id)) {
 			std::string s_name = gm->players()[p->object_id].name;
@@ -305,6 +306,9 @@ void NetworkManager::process_packet(char* ptr)
 			gm->npcs()[p->object_id].max_hp = p->max_hp;
 			gm->npcs()[p->object_id].exp = p->exp;
 			gm->npcs()[p->object_id].level = p->level;
+			if (p->is_burning) {
+				gm->npcs()[p->object_id].fire_end_time = std::chrono::steady_clock::now() + std::chrono::milliseconds(1200);
+			}
 		}
 		break;
 	}

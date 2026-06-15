@@ -24,7 +24,7 @@ enum PACKET_TYPE {
 						// 텔레포트 요청 패킷 (목적지 좌표 포함)
 						// STRESS TEST용으로 추가한 패킷입니다. 시작 마을에 몰리는 것을 방지.
 	C2S_LOGOUT,			// Client to Server: Logout request
-	C2S_TEST_WEAPON,
+	C2S_CHEAT,			// Client to Server: Cheat command
 	C2S_USE_QUICKSLOT,	// Client to Server: Use quick slot (1 or 2)
 	C2S_INTERACT_NPC,   // Client to Server: Interact with an NPC (e.g. F key)
 	C2S_TRADE_COMMAND,  // Client to Server: Send trade option (e.g. 1, 2, 3)
@@ -122,10 +122,25 @@ struct C2S_Logout {
 	PACKET_TYPE   type;
 };
 
-struct C2S_TestWeapon {
+enum class CheatType : char {
+	TOGGLE_ARMOR = 1,
+	LEVEL_UP = 2,
+	TOGGLE_GOD_MODE = 3,
+	TOGGLE_SKILLS = 4,
+	KILL_PLAYER = 5,
+	ADD_MONEY = 6,
+	SET_MONEY_ZERO = 7,
+	TP_IRON_GOLEM = 8,
+	TP_ZOMBIE = 9,
+	TP_CREEPER = 10,
+	TP_ENDERMAN = 11,
+	TP_DRAGON = 12
+};
+
+struct C2S_Cheat {
 	unsigned char size;
 	PACKET_TYPE   type;
-	char weapon_tier; // 1=Wood, 2=Stone, 3=Gold, 4=Iron, 5=Diamond, 6=Netherite
+	CheatType     cheat_type;
 };
 
 struct C2S_UseQuickSlot {
@@ -206,6 +221,7 @@ struct S2C_AddNpc {
 	int hp;
 	int max_hp;
 	char npc_state;
+	char is_burning = 0;
 };
 
 struct S2C_RemoveObject {
@@ -245,6 +261,7 @@ struct S2C_StatusChange {
 	char legs_tier;
 	char boots_tier;
 	char weapon_tier;
+	char is_burning = 0;
 };
 
 struct S2C_AttackEffect {

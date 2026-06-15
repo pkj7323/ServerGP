@@ -1,4 +1,4 @@
-#define NOMINMAX
+﻿#define NOMINMAX
 #include <algorithm>
 #include <iostream>
 #include <WS2tcpip.h>
@@ -340,6 +340,8 @@ public:
 	// Skills
 	int _unspent_sp = 0;
 	int _skills_mask = 0;
+
+	bool _is_god_mode = false;
 
 	std::chrono::time_point<std::chrono::system_clock> last_move_timestamp_;
 	std::chrono::time_point<std::chrono::system_clock> last_attack_time_;
@@ -693,6 +695,7 @@ void player_take_damage(std::shared_ptr<SESSION> s, int actual_dmg)
 	if (strncmp(s->userId_, "DUMMY_", 6) == 0) return;
 	
 	if (s->player_->_state.load() == PlayerState::DEAD) return;
+	if (s->player_->_is_god_mode) return;
 
 	if (s->player_->_skills_mask & (1 << static_cast<int>(SkillType::RESISTANCE))) {
 		actual_dmg = actual_dmg * 70 / 100;
@@ -1122,6 +1125,7 @@ public:
 					add_npc.hp = _hp;
 					add_npc.max_hp = _maxHp;
 					add_npc.npc_state = static_cast<char>(_aiState);
+					add_npc.is_burning = (fire_stacks_.load() > 0) ? 1 : 0;
 					s->do_send(add_npc.size, reinterpret_cast<char*>(&add_npc));
 				}
 			} else if (old_x != x_ || old_y != y_) { // 델타 체킹: 실제로 이동했을 때만 전송
@@ -1384,6 +1388,7 @@ bool SESSION::proccess_packet(unsigned char* buff)
 					add_npc.hp = npc->_hp;
 					add_npc.max_hp = npc->_maxHp;
 					add_npc.npc_state = static_cast<char>(npc->_aiState);
+					add_npc.is_burning = (npc->fire_stacks_.load() > 0) ? 1 : 0;
 					do_send(add_npc.size, reinterpret_cast<char*>(&add_npc));
 
 					npc->wake_up();
@@ -1964,35 +1969,153 @@ bool SESSION::proccess_packet(unsigned char* buff)
 		}
 		break;
 	}
-	case PACKET_TYPE::C2S_TEST_WEAPON:
+	case PACKET_TYPE::C2S_CHEAT:
 	{
-		C2S_TestWeapon* pkt = reinterpret_cast<C2S_TestWeapon*>(buff);
-		player_->_weapon_tier = pkt->weapon_tier;
-		
-		S2C_StatusChange stat;
-		stat.size = sizeof(stat);
-		stat.type = S2C_STATUS_CHANGE;
-		stat.object_id = id_;
-		stat.hp = player_->_hp;
-		stat.max_hp = player_->_maxHp;
-		stat.exp = player_->_exp;
-		stat.level = player_->_level;
-		stat.head_tier = player_->_head_tier;
-					stat.chest_tier = player_->_chest_tier;
-					stat.legs_tier = player_->_legs_tier;
-					stat.boots_tier = player_->_boots_tier;
-		stat.weapon_tier = player_->_weapon_tier;
-		do_send(stat.size, reinterpret_cast<char*>(&stat));
+		C2S_Cheat* pkt = reinterpret_cast<C2S_Cheat*>(buff);
+		bool status_changed = false;
+		bool inventory_changed = false;
+		bool skills_changed = false;
 
-		visible_players_mutex.lock();
-		auto view_copy = visible_players;
-		visible_players_mutex.unlock();
-		for (auto& pid : view_copy) {
-			std::shared_ptr<SESSION> s = clients[pid].load();
-			if (s && s->state_ == client_state::playing) {
-				s->do_send(stat.size, reinterpret_cast<char*>(&stat));
+		switch (pkt->cheat_type) {
+		case CheatType::TOGGLE_ARMOR:
+			if (player_->_head_tier == 4) {
+				player_->_head_tier = 0; player_->_chest_tier = 0; player_->_legs_tier = 0; player_->_boots_tier = 0; player_->_weapon_tier = 1;
+			} else {
+				player_->_head_tier = 4; player_->_chest_tier = 4; player_->_legs_tier = 4; player_->_boots_tier = 4; player_->_weapon_tier = 6;
+			}
+			status_changed = true;
+			break;
+		case CheatType::LEVEL_UP:
+			player_->_level += 1;
+			player_->_maxHp = g_player_config.hp + (player_->_level - 1) * 20;
+			player_->_hp = player_->_maxHp;
+			player_->_unspent_sp += 1;
+			status_changed = true;
+			skills_changed = true;
+			{
+				S2C_ChatMessage chat_pkt;
+				chat_pkt.size = sizeof(chat_pkt);
+				chat_pkt.type = S2C_CHAT_MESSAGE;
+				chat_pkt.object_id = -1;
+				std::string msg = "[System] Level Up! Current Level: " + std::to_string(player_->_level);
+				strncpy_s(chat_pkt.message, msg.c_str(), MAX_CHAT_MSG_LEN - 1);
+				chat_pkt.message[MAX_CHAT_MSG_LEN - 1] = '\0';
+				do_send(chat_pkt.size, reinterpret_cast<char*>(&chat_pkt));
+			}
+			break;
+		case CheatType::TOGGLE_GOD_MODE:
+			player_->_is_god_mode = !player_->_is_god_mode;
+			{
+				S2C_ChatMessage chat_pkt;
+				chat_pkt.size = sizeof(chat_pkt);
+				chat_pkt.type = S2C_CHAT_MESSAGE;
+				chat_pkt.object_id = -1;
+				std::string msg = player_->_is_god_mode ? "[System] God Mode ON" : "[System] God Mode OFF";
+				strncpy_s(chat_pkt.message, msg.c_str(), MAX_CHAT_MSG_LEN - 1);
+				chat_pkt.message[MAX_CHAT_MSG_LEN - 1] = '\0';
+				do_send(chat_pkt.size, reinterpret_cast<char*>(&chat_pkt));
+			}
+			break;
+		case CheatType::TOGGLE_SKILLS:
+			if (player_->_skills_mask == 0xF) player_->_skills_mask = 0;
+			else player_->_skills_mask = 0xF;
+			skills_changed = true;
+			break;
+		case CheatType::KILL_PLAYER:
+			player_->_hp = 0;
+			status_changed = true;
+			break;
+		case CheatType::ADD_MONEY:
+			player_->_gold += 10000;
+			inventory_changed = true;
+			break;
+		case CheatType::SET_MONEY_ZERO:
+			player_->_gold = 0;
+			inventory_changed = true;
+			break;
+		case CheatType::TP_IRON_GOLEM:
+			force_teleport(1000, 1100);
+			break;
+		case CheatType::TP_ZOMBIE:
+			force_teleport(1000, 1250);
+			break;
+		case CheatType::TP_CREEPER:
+			force_teleport(1000, 1500);
+			break;
+		case CheatType::TP_ENDERMAN:
+			force_teleport(1000, 1750);
+			break;
+		case CheatType::TP_DRAGON:
+			force_teleport(1000, 1800);
+			break;
+		}
+
+		if (status_changed) {
+			S2C_StatusChange stat;
+			stat.size = sizeof(stat);
+			stat.type = S2C_STATUS_CHANGE;
+			stat.object_id = id_;
+			stat.hp = player_->_hp;
+			stat.max_hp = player_->_maxHp;
+			stat.exp = player_->_exp;
+			stat.level = player_->_level;
+			stat.head_tier = player_->_head_tier;
+			stat.chest_tier = player_->_chest_tier;
+			stat.legs_tier = player_->_legs_tier;
+			stat.boots_tier = player_->_boots_tier;
+			stat.weapon_tier = player_->_weapon_tier;
+			stat.is_burning = 0;
+			do_send(stat.size, reinterpret_cast<char*>(&stat));
+
+			visible_players_mutex.lock();
+			auto view_copy = visible_players;
+			visible_players_mutex.unlock();
+			for (auto& pid : view_copy) {
+				std::shared_ptr<SESSION> s = clients[pid].load();
+				if (s && s->state_ == client_state::playing) {
+					s->do_send(stat.size, reinterpret_cast<char*>(&stat));
+				}
 			}
 		}
+
+		if (inventory_changed) {
+			S2C_InventorySync inv_pkt;
+			inv_pkt.size = sizeof(inv_pkt);
+			inv_pkt.type = S2C_INVENTORY_SYNC;
+			inv_pkt.gold = player_->_gold;
+			int idx = 0;
+			for (const auto& [item_id, count] : player_->inventory) {
+				if (count > 0 && idx < MAX_INVENTORY_SLOTS) {
+					inv_pkt.items[idx].item_id = item_id;
+					inv_pkt.items[idx].count = count;
+					idx++;
+				}
+			}
+			inv_pkt.item_count = idx;
+			do_send(inv_pkt.size, reinterpret_cast<char*>(&inv_pkt));
+		}
+
+		if (skills_changed) {
+			S2C_SkillSync pkt;
+			pkt.size = sizeof(pkt);
+			pkt.type = S2C_SKILL_SYNC;
+			pkt.unspent_sp = player_->_unspent_sp;
+			pkt.skills_mask = player_->_skills_mask;
+			do_send(pkt.size, reinterpret_cast<char*>(&pkt));
+		}
+		
+		if (player_->_hp <= 0 && player_->_state.load() != PlayerState::DEAD) {
+			PlayerState expected = PlayerState::ALIVE;
+			if (player_->_state.compare_exchange_strong(expected, PlayerState::DEAD)) {
+				event_type ev;
+				ev.obj_id = id_;
+				ev.event_id = EVENT_PLAYER_RESPAWN;
+				ev.target_id = -1;
+				ev.wakeup_time = std::chrono::system_clock::now() + std::chrono::seconds(5);
+				timer_queue.push(ev);
+			}
+		}
+
 		break;
 	}
 	case PACKET_TYPE::C2S_INTERACT_NPC:
@@ -2363,6 +2486,7 @@ void SESSION::force_teleport(int tx, int ty) {
 				add_npc.hp = npc->_hp;
 				add_npc.max_hp = npc->_maxHp;
 				add_npc.npc_state = static_cast<char>(npc->_aiState);
+				add_npc.is_burning = (npc->fire_stacks_.load() > 0) ? 1 : 0;
 				do_send(add_npc.size, reinterpret_cast<char*>(&add_npc));
 				npc->wake_up();
 			} else {
@@ -2463,6 +2587,7 @@ void SESSION::send_already_spawn_players()
 					add_npc.hp = npc->_hp;
 					add_npc.max_hp = npc->_maxHp;
 					add_npc.npc_state = static_cast<char>(npc->_aiState);
+					add_npc.is_burning = (npc->fire_stacks_.load() > 0) ? 1 : 0;
 					do_send(add_npc.size, reinterpret_cast<char*>(&add_npc));
 
 					visible_players_mutex.lock();
@@ -2914,6 +3039,7 @@ void worker_thread()
 					add_pkt.hp        = npc->_hp;
 					add_pkt.max_hp    = npc->_maxHp;
 					add_pkt.npc_state = static_cast<char>(npc->_aiState);
+					add_pkt.is_burning = (npc->fire_stacks_.load() > 0) ? 1 : 0;
 					
 					for (auto pid : sector.get_objects_nearby_sector(npc->x_, npc->y_)) {
 						if (!is_npc_id(pid)) {
@@ -2970,13 +3096,7 @@ void worker_thread()
 				stat.legs_tier = 0;
 				stat.boots_tier = 0;
 				stat.weapon_tier = 0;
-
-				S2C_ChatMessage chat_pkt;
-				chat_pkt.size = sizeof(chat_pkt);
-				chat_pkt.type = S2C_CHAT_MESSAGE;
-				chat_pkt.object_id = ev.obj_id;
-				std::string msg = "Fire aspect - " + std::to_string(ev.attack_power);
-				strncpy_s(chat_pkt.message, msg.c_str(), sizeof(chat_pkt.message));
+				stat.is_burning = (npc->fire_stacks_.load() > 0) ? 1 : 0;
 
 				auto nearby = sector.get_objects_nearby_sector(npc->x_, npc->y_);
 				for (auto pid : nearby) {
@@ -2985,7 +3105,6 @@ void worker_thread()
 						if (s && s->state_ == client_state::playing) {
 							if (!s->is_visible(npc->x_, npc->y_)) continue;
 							s->do_send(stat.size, reinterpret_cast<char*>(&stat));
-							s->do_send(chat_pkt.size, reinterpret_cast<char*>(&chat_pkt));
 						}
 					}
 				}
@@ -3118,6 +3237,7 @@ void worker_thread()
 							add_pkt.hp        = npc->_hp;
 							add_pkt.max_hp    = npc->_maxHp;
 							add_pkt.npc_state = static_cast<char>(npc->_aiState);
+							add_pkt.is_burning = (npc->fire_stacks_.load() > 0) ? 1 : 0;
 							s->do_send(add_pkt.size, reinterpret_cast<char*>(&add_pkt));
 
 							npc->wake_up();
