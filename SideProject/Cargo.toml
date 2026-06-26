@@ -1,0 +1,5 @@
+[workspace]
+members = [
+    "Rust/echo server"
+]
+resolver = "2"

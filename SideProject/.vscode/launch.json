@@ -1,0 +1,38 @@
+{
+    // IntelliSense를 사용하여 가능한 특성에 대해 알아보세요.
+    // 기존 특성에 대한 설명을 보려면 가리킵니다.
+    // 자세한 내용을 보려면 https://go.microsoft.com/fwlink/?linkid=830387을(를) 방문하세요.
+      "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "🚀 Run Go Server",
+            "type": "shell",
+            "command": "go",
+            "args": ["run", "main.go"],
+            "options": {
+                "cwd": "${workspaceFolder}/SideProject/Go/echo server"
+            },
+            "presentation": {
+                "reveal": "always",
+                "panel": "new",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "🦀 Run Rust Server",
+            "type": "shell",
+            "command": "cargo",
+            "args": ["run"],
+            "options": {
+                "cwd": "${workspaceFolder}/SideProject/Rust/echo server"
+            },
+            "presentation": {
+                "reveal": "always",
+                "panel": "new",
+                "clear": true
+            },
+            "problemMatcher": []
+        }
+    ]
+}

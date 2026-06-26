@@ -1,0 +1,35 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "🚀 Run Go Server",
+            "type": "shell",
+            "command": "go",
+            "args": ["run", "main.go"],
+            "options": {
+                "cwd": "${workspaceFolder}/SideProject/Go/echo server"
+            },
+            "presentation": {
+                "reveal": "always",
+                "panel": "new",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "🦀 Run Rust Server",
+            "type": "shell",
+            "command": "cargo",
+            "args": ["run"],
+            "options": {
+                "cwd": "${workspaceFolder}/SideProject/Rust/echo server"
+            },
+            "presentation": {
+                "reveal": "always",
+                "panel": "new",
+                "clear": true
+            },
+            "problemMatcher": []
+        }
+    ]
+}
