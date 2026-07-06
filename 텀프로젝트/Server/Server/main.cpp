@@ -21,6 +21,7 @@
 #include "npc_ai_manager.h"
 #include <tbb/concurrent_unordered_map.h>
 #include <unordered_set>
+#include "RingBuffer.h"
 
 
 class SESSION;
@@ -441,7 +442,7 @@ public:
 	SOCKET			client_;
 	int				id_;
 	EXP_OVER		recv_over_;
-	int				prev_recv_count_ = 0;
+	RingBuffer		recv_buffer_;
 	client_state	state_;
 	char			userId_[MAX_NAME_LEN] = {};
 
@@ -457,7 +458,7 @@ public:
 
 	SESSION()
 	{
-		prev_recv_count_ = 0;
+		recv_buffer_.Clear();
 		state_ = client_state::connected;
 		id_ = 999;
 		client_ = INVALID_SOCKET;
@@ -474,7 +475,7 @@ public:
 	}
 	void init()
 	{
-		prev_recv_count_ = 0;
+		recv_buffer_.Clear();
 		state_ = client_state::connected;
 		id_ = 999;
 		closesocket(client_);
@@ -487,8 +488,8 @@ public:
 		}
 		ZeroMemory(&recv_over_.over, sizeof(WSAOVERLAPPED));
 		recv_over_.type = io_type::recv;
-		recv_over_.wsabuffer.buf = recv_over_.buff; // 본인의 버퍼 주소로 재설정
-		recv_over_.wsabuffer.len = BUF_SIZE;
+		recv_over_.wsabuffer.buf = recv_buffer_.GetWritePos();
+		recv_over_.wsabuffer.len = recv_buffer_.GetDirectWriteSize();
 
 		std::lock_guard<std::mutex> lock(send_mtx);
 		send_queue.clear();
@@ -498,8 +499,8 @@ public:
 	{
 		DWORD recv_flag = 0;
 		recv_over_.over = {};
-		recv_over_.wsabuffer.buf = recv_over_.buff + prev_recv_count_;
-		recv_over_.wsabuffer.len = BUF_SIZE - prev_recv_count_;
+		recv_over_.wsabuffer.buf = recv_buffer_.GetWritePos();
+		recv_over_.wsabuffer.len = recv_buffer_.GetDirectWriteSize();
 		WSARecv(client_, &recv_over_.wsabuffer, 1, 0, &recv_flag, &recv_over_.over, nullptr);
 	}
 	void do_send(int size, char* packet)
@@ -2911,38 +2912,41 @@ void worker_thread()
 			{
 				break;
 			}
-			unsigned char* p = reinterpret_cast<unsigned char*>(o->buff);
-			int data_size = num_bytes + cl->prev_recv_count_;
+			cl->recv_buffer_.CommitWrite(num_bytes);
+
 			bool packet_valid = true;
-			while (data_size > 0)
+			while (true)
 			{
-				unsigned char packet_size = p[0];
-				if (packet_size > data_size)
+				unsigned char packet_size;
+				// 패킷 크기(1바이트)를 엿본다
+				if (!cl->recv_buffer_.Peek(reinterpret_cast<char*>(&packet_size), 1))
 				{
+					break; // 데이터 부족
+				}
+				
+				// 패킷 사이즈 비정상 감지 (해킹 방어용)
+				if (packet_size <= 0) {
+					packet_valid = false;
+					client_disconnect(id);
 					break;
 				}
-				packet_valid = cl->proccess_packet(p);
+
+				// 완성된 패킷인지 확인
+				if (cl->recv_buffer_.GetStoredSize() < packet_size)
+				{
+					break; // 아직 다 안 옴
+				}
+
+				// 패킷 완성 시 완전한 복사 (Wrap-around 자동 처리됨)
+				unsigned char packet_buf[256];
+				cl->recv_buffer_.Read(reinterpret_cast<char*>(packet_buf), packet_size);
+
+				packet_valid = cl->proccess_packet(packet_buf);
 				if (!packet_valid)
 				{
 					client_disconnect(id);
 					break;
 				}
-				p += packet_size;
-				data_size -= packet_size;
-			}
-			if (!packet_valid)
-			{
-				break;
-			}
-			if (data_size > 0)
-			{
-				memmove(cl->recv_over_.buff, p, data_size);
-				cl->prev_recv_count_ = data_size;
-			}
-			else
-			{
-				cl->prev_recv_count_ = 0;
-				ZeroMemory(o->buff, sizeof(o->buff));
 			}
 
 			cl->do_recv();
