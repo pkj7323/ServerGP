@@ -23,6 +23,28 @@
 #include <unordered_set>
 #include "RingBuffer.h"
 
+// --- [임시 계측] 수신 패킷 재조립 비용 측정 (RingBuffer Before/After 비교용) ---
+// memmove(Before) 또는 RingBuffer::Read(After) 호출 앞뒤로 시간을 재서 누적한다.
+// 다시 잴 일 있으면 이 값을 1로. 끝나면 이 블록과 사용처를 통째로 지울 것.
+#define ENABLE_REASSEMBLY_PROFILING 0
+std::atomic<long long> g_reassembly_ns{ 0 };
+std::atomic<long long> g_reassembly_calls{ 0 };
+
+void report_reassembly_cost_periodically()
+{
+	using namespace std::chrono;
+	auto start = steady_clock::now();
+	while (true) {
+		std::this_thread::sleep_for(5s);
+		long long ns = g_reassembly_ns.load();
+		long long calls = g_reassembly_calls.load();
+		double elapsed_s = duration_cast<duration<double>>(steady_clock::now() - start).count();
+		std::cout << "[REASSEMBLY] elapsed=" << elapsed_s << "s calls=" << calls
+			<< " total_us=" << (ns / 1000.0)
+			<< " avg_ns_per_call=" << (calls ? (double)ns / calls : 0.0) << std::endl;
+	}
+}
+
 
 class SESSION;
 enum NpcType : uint8_t {
@@ -1342,7 +1364,9 @@ bool SESSION::proccess_packet(unsigned char* buff)
 		}
 		sector.move_object(id_, old_x, old_y, player_->x_, player_->y_); // 섹터 정보 업데이트
 
-		auto old_view = visible_players;
+		visible_players_mutex.lock();
+		auto old_view = visible_players; // 다른 세션 스레드가 s->visible_players.insert/erase 하는 동안
+		visible_players_mutex.unlock();  // 락 없이 복사하면 unordered_set 내부 구조가 깨짐 (레이스)
 
 		std::unordered_set<int> new_visible_players;
 		auto object_ids_nearby_sector = sector.get_objects_nearby_sector(player_->x_, player_->y_);
@@ -2453,7 +2477,9 @@ void SESSION::force_teleport(int tx, int ty) {
 	tp_pkt.y = ty;
 	do_send(tp_pkt.size, reinterpret_cast<char*>(&tp_pkt));
 
+	visible_players_mutex.lock();
 	auto old_view = visible_players;
+	visible_players_mutex.unlock();
 	std::unordered_set<int> new_visible_players;
 	auto object_ids_nearby = sector.get_objects_nearby_sector(tx, ty);
 	
@@ -2632,7 +2658,11 @@ void broadcast_player_remove_packet(int player_id)
 	auto removed_player = clients[player_id].load();
 	if (!removed_player) return;
 
-	for (auto& id : removed_player->visible_players)
+	removed_player->visible_players_mutex.lock();
+	auto visible_players_copy = removed_player->visible_players;
+	removed_player->visible_players_mutex.unlock();
+
+	for (auto& id : visible_players_copy)
 	{
 		if (id != player_id && !is_npc_id(id))
 		{
@@ -2939,7 +2969,17 @@ void worker_thread()
 
 				// 패킷 완성 시 완전한 복사 (Wrap-around 자동 처리됨)
 				unsigned char packet_buf[256];
+#if ENABLE_REASSEMBLY_PROFILING
+				{
+					auto t0 = std::chrono::high_resolution_clock::now();
+					cl->recv_buffer_.Read(reinterpret_cast<char*>(packet_buf), packet_size);
+					auto t1 = std::chrono::high_resolution_clock::now();
+					g_reassembly_ns += std::chrono::duration_cast<std::chrono::nanoseconds>(t1 - t0).count();
+					g_reassembly_calls++;
+				}
+#else
 				cl->recv_buffer_.Read(reinterpret_cast<char*>(packet_buf), packet_size);
+#endif
 
 				packet_valid = cl->proccess_packet(packet_buf);
 				if (!packet_valid)
@@ -3198,7 +3238,9 @@ void worker_thread()
 				s->do_send(move_packet.size, reinterpret_cast<char*>(&move_packet));
 				
 				// Recompute visibility
+				s->visible_players_mutex.lock();
 				auto old_view = s->visible_players;
+				s->visible_players_mutex.unlock();
 				std::unordered_set<int> new_visible_players;
 				auto object_ids_nearby_sector = sector.get_objects_nearby_sector(s->player_->x_, s->player_->y_);
 				for (auto& oid : object_ids_nearby_sector)
@@ -3491,6 +3533,10 @@ int main()
 		sizeof(SOCKADDR_IN) + 16, sizeof(SOCKADDR_IN) + 16, NULL, &accept_over.over);
 
 	std::thread ai_thread_handle(timer_thread);
+#if ENABLE_REASSEMBLY_PROFILING
+	std::thread reassembly_report_thread(report_reassembly_cost_periodically);
+	reassembly_report_thread.detach();
+#endif
 
 	std::vector<std::thread> worker_threads;
 	for (unsigned int i = 0; i < std::thread::hardware_concurrency(); ++i)
