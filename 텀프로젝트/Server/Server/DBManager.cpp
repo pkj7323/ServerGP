@@ -38,6 +38,19 @@ void DBManager::ReportDBError(SQLHANDLE hHandle, SQLSMALLINT hType, RETCODE RetC
 	}
 }
 
+// 저장 프로시저 인자는 문자열에 이어 붙이지 않고 ? 자리표시자에 바인딩한다 (SQL 인젝션 방지).
+// 바인딩한 버퍼는 SQLExecDirect/SQLExecute 가 끝날 때까지 살아 있어야 한다.
+static SQLRETURN BindUserId(SQLHSTMT hstmt, SQLUSMALLINT idx, const std::wstring& uid, SQLLEN& ind) {
+	ind = SQL_NTS;
+	return SQLBindParameter(hstmt, idx, SQL_PARAM_INPUT, SQL_C_WCHAR, SQL_WVARCHAR,
+		50, 0, (SQLPOINTER)uid.c_str(), 0, &ind); // Users.user_id nvarchar(50)
+}
+
+static SQLRETURN BindInt(SQLHSTMT hstmt, SQLUSMALLINT idx, SQLINTEGER& value) {
+	return SQLBindParameter(hstmt, idx, SQL_PARAM_INPUT, SQL_C_SLONG, SQL_INTEGER,
+		0, 0, &value, 0, nullptr);
+}
+
 void DBManager::Init(std::function<void(int, int, const DBTask&)> notifyCb) {
 	m_notifyCb = notifyCb;
 
@@ -132,8 +145,9 @@ void DBManager::HandleLoginAuth(DBTask& task) {
 		return;
 	}
 
-	std::wstring query = L"EXEC check_auth '" + w_uid + L"'";
-	retcode = SQLExecDirect(check_hstmt, (SQLWCHAR*)query.c_str(), SQL_NTS);
+	SQLLEN uid_ind;
+	BindUserId(check_hstmt, 1, w_uid, uid_ind);
+	retcode = SQLExecDirect(check_hstmt, (SQLWCHAR*)L"{CALL check_auth(?)}", SQL_NTS);
 	if (retcode != SQL_SUCCESS && retcode != SQL_SUCCESS_WITH_INFO) {
 		ReportDBError(check_hstmt, SQL_HANDLE_STMT, retcode);
 		SQLFreeHandle(SQL_HANDLE_STMT, check_hstmt);
@@ -155,8 +169,8 @@ void DBManager::HandleLoginAuth(DBTask& task) {
 		SQLHSTMT hstmt = SQL_NULL_HSTMT;
 		retcode = SQLAllocHandle(SQL_HANDLE_STMT, m_hdbc, &hstmt);
 		if (retcode == SQL_SUCCESS) {
-			query = L"EXEC select_user_data '" + w_uid + L"'";
-			retcode = SQLExecDirect(hstmt, (SQLWCHAR*)query.c_str(), SQL_NTS);
+			BindUserId(hstmt, 1, w_uid, uid_ind);
+			retcode = SQLExecDirect(hstmt, (SQLWCHAR*)L"{CALL select_user_data(?)}", SQL_NTS);
 			
 			if (retcode == SQL_SUCCESS || retcode == SQL_SUCCESS_WITH_INFO) {
 				retcode = SQLFetch(hstmt);
@@ -221,8 +235,8 @@ void DBManager::HandleLoginAuth(DBTask& task) {
 				SQLHSTMT inv_hstmt = SQL_NULL_HSTMT;
 				retcode = SQLAllocHandle(SQL_HANDLE_STMT, m_hdbc, &inv_hstmt);
 				if (retcode == SQL_SUCCESS) {
-					query = L"EXEC select_inventory_data '" + w_uid + L"'";
-					retcode = SQLExecDirect(inv_hstmt, (SQLWCHAR*)query.c_str(), SQL_NTS);
+					BindUserId(inv_hstmt, 1, w_uid, uid_ind);
+					retcode = SQLExecDirect(inv_hstmt, (SQLWCHAR*)L"{CALL select_inventory_data(?)}", SQL_NTS);
 					
 					if (retcode == SQL_SUCCESS || retcode == SQL_SUCCESS_WITH_INFO) {
 						while (true) {
@@ -243,8 +257,10 @@ void DBManager::HandleLoginAuth(DBTask& task) {
 				SQLHSTMT quest_hstmt = SQL_NULL_HSTMT;
 				retcode = SQLAllocHandle(SQL_HANDLE_STMT, m_hdbc, &quest_hstmt);
 				if (retcode == SQL_SUCCESS) {
-					query = L"EXEC select_quest_data '" + w_uid + L"', 1";
-					retcode = SQLExecDirect(quest_hstmt, (SQLWCHAR*)query.c_str(), SQL_NTS);
+					SQLINTEGER quest_id = 1;
+					BindUserId(quest_hstmt, 1, w_uid, uid_ind);
+					BindInt(quest_hstmt, 2, quest_id);
+					retcode = SQLExecDirect(quest_hstmt, (SQLWCHAR*)L"{CALL select_quest_data(?, ?)}", SQL_NTS);
 					
 					if (retcode == SQL_SUCCESS || retcode == SQL_SUCCESS_WITH_INFO) {
 						retcode = SQLFetch(quest_hstmt);
@@ -268,8 +284,8 @@ void DBManager::HandleLoginAuth(DBTask& task) {
 				SQLHSTMT skill_hstmt = SQL_NULL_HSTMT;
 				retcode = SQLAllocHandle(SQL_HANDLE_STMT, m_hdbc, &skill_hstmt);
 				if (retcode == SQL_SUCCESS) {
-					query = L"EXEC select_skill_data '" + w_uid + L"'";
-					retcode = SQLExecDirect(skill_hstmt, (SQLWCHAR*)query.c_str(), SQL_NTS);
+					BindUserId(skill_hstmt, 1, w_uid, uid_ind);
+					retcode = SQLExecDirect(skill_hstmt, (SQLWCHAR*)L"{CALL select_skill_data(?)}", SQL_NTS);
 					
 					if (retcode == SQL_SUCCESS || retcode == SQL_SUCCESS_WITH_INFO) {
 						retcode = SQLFetch(skill_hstmt);
@@ -311,21 +327,17 @@ void DBManager::HandleSaveData(DBTask& task) {
 	std::wstring w_uid(uid.begin(), uid.end());
 	
 	// update_user_data expects: user_id, x, y, hp, max_hp, level, exp, head_tier, chest_tier, legs_tier, boots_tier, weapon_tier, gold
-	std::wstring query = L"EXEC update_user_data '" + w_uid + L"', " 
-						+ std::to_wstring(pd.x) + L", " 
-						+ std::to_wstring(pd.y) + L", "
-						+ std::to_wstring(pd.hp) + L", "
-						+ std::to_wstring(pd.max_hp) + L", "
-						+ std::to_wstring(pd.level) + L", "
-						+ std::to_wstring(pd.exp) + L", "
-						+ std::to_wstring(pd.head_tier) + L", "
-						+ std::to_wstring(pd.chest_tier) + L", "
-						+ std::to_wstring(pd.legs_tier) + L", "
-						+ std::to_wstring(pd.boots_tier) + L", "
-						+ std::to_wstring(pd.weapon_tier) + L", "
-						+ std::to_wstring(pd.gold);
+	SQLINTEGER stats[] = {
+		pd.x, pd.y, pd.hp, pd.max_hp, pd.level, pd.exp,
+		pd.head_tier, pd.chest_tier, pd.legs_tier, pd.boots_tier, pd.weapon_tier, pd.gold
+	};
+	SQLLEN uid_ind;
+	BindUserId(hstmt, 1, w_uid, uid_ind);
+	for (SQLUSMALLINT i = 0; i < std::size(stats); ++i) {
+		BindInt(hstmt, static_cast<SQLUSMALLINT>(i + 2), stats[i]);
+	}
 
-	retcode = SQLExecDirect(hstmt, (SQLWCHAR*)query.c_str(), SQL_NTS);
+	retcode = SQLExecDirect(hstmt, (SQLWCHAR*)L"{CALL update_user_data(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)}", SQL_NTS);
 	if (retcode != SQL_SUCCESS && retcode != SQL_SUCCESS_WITH_INFO) {
 		ReportDBError(hstmt, SQL_HANDLE_STMT, retcode);
 	}
@@ -336,10 +348,12 @@ void DBManager::HandleSaveData(DBTask& task) {
 	SQLHSTMT quest_hstmt = SQL_NULL_HSTMT;
 	retcode = SQLAllocHandle(SQL_HANDLE_STMT, m_hdbc, &quest_hstmt);
 	if (retcode == SQL_SUCCESS) {
-		std::wstring quest_query = L"EXEC update_quest_data '" + w_uid + L"', 1, "
-								 + std::to_wstring(pd.quest_stage) + L", "
-								 + std::to_wstring(pd.quest_progress);
-		retcode = SQLExecDirect(quest_hstmt, (SQLWCHAR*)quest_query.c_str(), SQL_NTS);
+		SQLINTEGER quest_id = 1, stage = pd.quest_stage, progress = pd.quest_progress;
+		BindUserId(quest_hstmt, 1, w_uid, uid_ind);
+		BindInt(quest_hstmt, 2, quest_id);
+		BindInt(quest_hstmt, 3, stage);
+		BindInt(quest_hstmt, 4, progress);
+		retcode = SQLExecDirect(quest_hstmt, (SQLWCHAR*)L"{CALL update_quest_data(?, ?, ?, ?)}", SQL_NTS);
 		if (retcode != SQL_SUCCESS && retcode != SQL_SUCCESS_WITH_INFO) {
 			ReportDBError(quest_hstmt, SQL_HANDLE_STMT, retcode);
 		}
@@ -350,26 +364,39 @@ void DBManager::HandleSaveData(DBTask& task) {
 	SQLHSTMT skill_hstmt = SQL_NULL_HSTMT;
 	retcode = SQLAllocHandle(SQL_HANDLE_STMT, m_hdbc, &skill_hstmt);
 	if (retcode == SQL_SUCCESS) {
-		std::wstring skill_query = L"EXEC update_skill_data '" + w_uid + L"', "
-								 + std::to_wstring(pd.unspent_sp) + L", "
-								 + std::to_wstring(pd.skills_mask);
-		retcode = SQLExecDirect(skill_hstmt, (SQLWCHAR*)skill_query.c_str(), SQL_NTS);
+		SQLINTEGER sp = pd.unspent_sp, mask = pd.skills_mask;
+		BindUserId(skill_hstmt, 1, w_uid, uid_ind);
+		BindInt(skill_hstmt, 2, sp);
+		BindInt(skill_hstmt, 3, mask);
+		retcode = SQLExecDirect(skill_hstmt, (SQLWCHAR*)L"{CALL update_skill_data(?, ?, ?)}", SQL_NTS);
 		if (retcode != SQL_SUCCESS && retcode != SQL_SUCCESS_WITH_INFO) {
 			ReportDBError(skill_hstmt, SQL_HANDLE_STMT, retcode);
 		}
 		SQLFreeHandle(SQL_HANDLE_STMT, skill_hstmt);
 	}
 
-	// Save inventory
-	for (const auto& pair : pd.inventory) {
+	// Save inventory: 한 번 Prepare 후 바인딩된 변수만 바꿔가며 아이템 수만큼 Execute
+	if (!pd.inventory.empty()) {
 		SQLHSTMT inv_hstmt = SQL_NULL_HSTMT;
 		retcode = SQLAllocHandle(SQL_HANDLE_STMT, m_hdbc, &inv_hstmt);
 		if (retcode == SQL_SUCCESS) {
-			std::wstring inv_query = L"EXEC save_inventory_data '" + w_uid + L"', "
-									+ std::to_wstring(pair.first) + L", "
-									+ std::to_wstring(pair.second);
-			retcode = SQLExecDirect(inv_hstmt, (SQLWCHAR*)inv_query.c_str(), SQL_NTS);
-			if (retcode != SQL_SUCCESS && retcode != SQL_SUCCESS_WITH_INFO) {
+			retcode = SQLPrepare(inv_hstmt, (SQLWCHAR*)L"{CALL save_inventory_data(?, ?, ?)}", SQL_NTS);
+			if (retcode == SQL_SUCCESS || retcode == SQL_SUCCESS_WITH_INFO) {
+				SQLINTEGER item_id = 0, item_count = 0;
+				BindUserId(inv_hstmt, 1, w_uid, uid_ind);
+				BindInt(inv_hstmt, 2, item_id);
+				BindInt(inv_hstmt, 3, item_count);
+
+				for (const auto& pair : pd.inventory) {
+					item_id = pair.first;
+					item_count = pair.second;
+					retcode = SQLExecute(inv_hstmt);
+					if (retcode != SQL_SUCCESS && retcode != SQL_SUCCESS_WITH_INFO) {
+						ReportDBError(inv_hstmt, SQL_HANDLE_STMT, retcode);
+					}
+					SQLFreeStmt(inv_hstmt, SQL_CLOSE); // 다음 Execute 전에 결과 커서 정리
+				}
+			} else {
 				ReportDBError(inv_hstmt, SQL_HANDLE_STMT, retcode);
 			}
 			SQLFreeHandle(SQL_HANDLE_STMT, inv_hstmt);
