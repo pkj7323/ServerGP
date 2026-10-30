@@ -11,6 +11,7 @@
 #include <thread>
 
 #include "Protocol.h"
+#include "ExperimentConfig.h"
 
 // Define player_data structure to hold data from/to the DB
 struct player_data {
@@ -79,6 +80,9 @@ private:
 	~DBManager();
 
 	void DBWorkerThread();
+	void RunTask(DBTask& task);
+	bool ConnectDb(SQLHDBC& hdbc);
+	SQLHDBC CurrentDbc();
 	void HandleLoginAuth(DBTask& task);
 	void HandleSaveData(DBTask& task);
 

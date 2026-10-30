@@ -16,12 +16,22 @@
 #include <queue>
 
 #include "Protocol.h"
+#include "ExperimentConfig.h"
 #include "DBManager.h"
 #include "npc_loader.h"
 #include "npc_ai_manager.h"
 #include <tbb/concurrent_unordered_map.h>
 #include <unordered_set>
 #include "RingBuffer.h"
+#if EXP_METRICS
+#include <fstream>
+#include <Psapi.h>
+#pragma comment(lib, "Psapi.lib")
+#endif
+#if EXP_SECTOR_BRUTE
+#include <memory>
+#include <unordered_map>
+#endif
 
 // --- [임시 계측] 수신 패킷 재조립 비용 측정 (RingBuffer Before/After 비교용) ---
 // memmove(Before) 또는 RingBuffer::Read(After) 호출 앞뒤로 시간을 재서 누적한다.
@@ -44,6 +54,65 @@ void report_reassembly_cost_periodically()
 			<< " avg_ns_per_call=" << (calls ? (double)ns / calls : 0.0) << std::endl;
 	}
 }
+
+#if EXP_METRICS
+// 성능 비교용: 1초마다 카운터를 EXP_SERVER_CSV 파일에 한 줄씩 기록한다.
+void report_experiment_metrics()
+{
+	using namespace std::chrono;
+	char path[MAX_PATH] = "server_metrics.csv";
+	GetEnvironmentVariableA("EXP_SERVER_CSV", path, MAX_PATH);
+	std::ofstream csv(path);
+	csv << "sec,cpu_pct,working_set_mb,wsasend_calls,send_packets,send_bytes,"
+		"sector_queries,sector_avg_ns,sector_avg_returned,"
+		"lua_calls,lua_avg_ns,lua_wait_avg_ns,lua_states,active_npcs,timer_events,timer_lag_avg_us,"
+		"db_tasks,db_avg_ms,db_pending\n";
+
+	const auto cpu_time = [] {
+		FILETIME created, exited, kernel, user;
+		GetProcessTimes(GetCurrentProcess(), &created, &exited, &kernel, &user);
+		ULARGE_INTEGER k{ kernel.dwLowDateTime, kernel.dwHighDateTime };
+		ULARGE_INTEGER u{ user.dwLowDateTime, user.dwHighDateTime };
+		return (k.QuadPart + u.QuadPart) / 10000.0; // 100ns -> ms
+	};
+	const auto average = [](long long total, long long count) {
+		return count ? static_cast<double>(total) / count : 0.0;
+	};
+	const unsigned cores = std::thread::hardware_concurrency();
+	double last_cpu = cpu_time();
+	auto last_time = steady_clock::now();
+
+	for (int sec = 1;; ++sec) {
+		std::this_thread::sleep_for(1s);
+		const auto now = steady_clock::now();
+		const double elapsed_ms = duration<double, std::milli>(now - last_time).count();
+		const double cpu = cpu_time();
+		PROCESS_MEMORY_COUNTERS mem{};
+		GetProcessMemoryInfo(GetCurrentProcess(), &mem, sizeof(mem));
+
+		const long long sector_queries = g_exp.sector_queries.exchange(0);
+		const long long lua_calls = g_exp.lua_calls.exchange(0);
+		const long long timer_events = g_exp.timer_events.exchange(0);
+		const long long db_tasks = g_exp.db_tasks.exchange(0);
+
+		csv << sec << ',' << (cpu - last_cpu) / (elapsed_ms * cores) * 100.0 << ','
+			<< mem.WorkingSetSize / (1024.0 * 1024.0) << ','
+			<< g_exp.wsasend_calls.exchange(0) << ',' << g_exp.send_packets.exchange(0) << ','
+			<< g_exp.send_bytes.exchange(0) << ',' << sector_queries << ','
+			<< average(g_exp.sector_ns.exchange(0), sector_queries) << ','
+			<< average(g_exp.sector_returned.exchange(0), sector_queries) << ','
+			<< lua_calls << ',' << average(g_exp.lua_ns.exchange(0), lua_calls) << ','
+			<< average(g_exp.lua_wait_ns.exchange(0), lua_calls) << ','
+			<< g_exp.lua_states.load() << ',' << g_exp.active_npcs.load() << ','
+			<< timer_events << ',' << average(g_exp.timer_lag_us.exchange(0), timer_events) << ','
+			<< db_tasks << ',' << average(g_exp.db_ns.exchange(0), db_tasks) / 1000000.0 << ','
+			<< g_exp.db_pending.load() << std::endl;
+
+		last_cpu = cpu;
+		last_time = now;
+	}
+}
+#endif
 
 
 class SESSION;
@@ -199,6 +268,117 @@ struct cell {
 	std::unordered_set<int> objects;
 	std::shared_mutex mtx; // 섹터 전용 Read-Write Lock
 };
+#if EXP_SECTOR_BRUTE
+// 실험: 격자 없이 평평한 배열을 전부 훑는다.
+// 위치 대신 격자 좌표를 비교하므로 반환되는 객체 집합은 Sector와 같고, 탐색 비용만 달라진다.
+class Sector
+{
+public:
+	Sector() : slots_(new Slot[MAX_SLOTS]) {}
+
+	void add_object(int object_id, int x, int y)
+	{
+		if (!in_world(x, y)) return;
+		std::unique_lock<std::shared_mutex> lock(mtx_);
+		insert_locked(object_id, pack_cell(x, y));
+	}
+
+	void remove_object(int object_id, int x, int y)
+	{
+		if (!in_world(x, y)) return;
+		std::unique_lock<std::shared_mutex> lock(mtx_);
+		erase_locked(object_id);
+	}
+
+	void move_object(int object_id, int old_x, int old_y, int new_x, int new_y)
+	{
+		if (old_x / SECTOR_SIZE == new_x / SECTOR_SIZE && old_y / SECTOR_SIZE == new_y / SECTOR_SIZE) return;
+		const bool old_valid = in_world(old_x, old_y);
+		const bool new_valid = in_world(new_x, new_y);
+		if (old_valid && new_valid) {
+			std::shared_lock<std::shared_mutex> lock(mtx_);
+			auto it = index_.find(object_id);
+			if (it != index_.end()) {
+				slots_[it->second].cell.store(pack_cell(new_x, new_y), std::memory_order_relaxed);
+				return;
+			}
+		}
+		std::unique_lock<std::shared_mutex> lock(mtx_);
+		if (old_valid) erase_locked(object_id);
+		if (new_valid) insert_locked(object_id, pack_cell(new_x, new_y));
+	}
+
+	std::vector<int> get_objects_nearby_sector(int x, int y, int range = VIEW_RANGE)
+	{
+		auto exp_start = EXP_NOW();
+		std::vector<int> nearby_objects;
+		nearby_objects.reserve(50);
+
+		const int start_x = std::max(0, x - range) / SECTOR_SIZE;
+		const int end_x = std::min(WORLD_WIDTH - 1, x + range) / SECTOR_SIZE;
+		const int start_y = std::max(0, y - range) / SECTOR_SIZE;
+		const int end_y = std::min(WORLD_HEIGHT - 1, y + range) / SECTOR_SIZE;
+		{
+			std::shared_lock<std::shared_mutex> lock(mtx_);
+			for (int i = 0; i < count_; ++i) {
+				const int cell = slots_[i].cell.load(std::memory_order_relaxed);
+				const int cell_x = cell & 0xFFFF;
+				const int cell_y = cell >> 16;
+				if (cell_x >= start_x && cell_x <= end_x && cell_y >= start_y && cell_y <= end_y) {
+					nearby_objects.push_back(slots_[i].id);
+				}
+			}
+		}
+		EXP_ADD(sector_queries, 1);
+		EXP_ADD(sector_returned, static_cast<long long>(nearby_objects.size()));
+		EXP_ADD_ELAPSED_NS(sector_ns, exp_start);
+		return nearby_objects;
+	}
+
+private:
+	struct Slot {
+		int id = -1;
+		std::atomic<int> cell{ 0 };
+	};
+	static constexpr int MAX_SLOTS = 1 << 19;
+
+	static bool in_world(int x, int y)
+	{
+		return x >= 0 && x < WORLD_WIDTH && y >= 0 && y < WORLD_HEIGHT;
+	}
+	static int pack_cell(int x, int y)
+	{
+		return ((y / SECTOR_SIZE) << 16) | (x / SECTOR_SIZE);
+	}
+	void insert_locked(int object_id, int cell)
+	{
+		auto [it, inserted] = index_.try_emplace(object_id, count_);
+		if (inserted) {
+			slots_[count_].id = object_id;
+			++count_;
+		}
+		slots_[it->second].cell.store(cell, std::memory_order_relaxed);
+	}
+	void erase_locked(int object_id)
+	{
+		auto it = index_.find(object_id);
+		if (it == index_.end()) return;
+		const int removed = it->second;
+		const int last = --count_;
+		if (removed != last) {
+			slots_[removed].id = slots_[last].id;
+			slots_[removed].cell.store(slots_[last].cell.load(std::memory_order_relaxed), std::memory_order_relaxed);
+			index_[slots_[removed].id] = removed;
+		}
+		index_.erase(object_id);
+	}
+
+	std::shared_mutex mtx_;
+	std::unique_ptr<Slot[]> slots_;
+	std::unordered_map<int, int> index_;
+	int count_ = 0;
+};
+#else
 class Sector
 {
 public:
@@ -257,6 +437,7 @@ public:
 
 	std::vector<int> get_objects_nearby_sector(int x, int y, int range = VIEW_RANGE)
 	{
+		auto exp_start = EXP_NOW();
 		std::vector<int> nearby_objects;
 		nearby_objects.reserve(AVERAGE_EXPECTED_OBJECTS);
 
@@ -283,6 +464,9 @@ public:
 			}
 		}
 
+		EXP_ADD(sector_queries, 1);
+		EXP_ADD(sector_returned, static_cast<long long>(nearby_objects.size()));
+		EXP_ADD_ELAPSED_NS(sector_ns, exp_start);
 		return nearby_objects;
 	}
 
@@ -290,6 +474,7 @@ private:
 	std::array<std::array<cell, WORLD_WIDTH / SECTOR_SIZE>, WORLD_HEIGHT / SECTOR_SIZE> object_sector;
 	const int AVERAGE_EXPECTED_OBJECTS = 50;
 };
+#endif
 Sector sector;
 ArmorConfig g_armor_config;
 PlayerConfig g_player_config;
@@ -527,6 +712,17 @@ public:
 	}
 	void do_send(int size, char* packet)
 	{
+		EXP_ADD(send_packets, 1);
+		EXP_ADD(send_bytes, size);
+#if EXP_SEND_PER_PACKET
+		EXP_OVER* send_over = new EXP_OVER(size, packet);
+		EXP_ADD(wsasend_calls, 1);
+		int send_ret = WSASend(client_, &send_over->wsabuffer, 1, nullptr, 0, &send_over->over, NULL);
+		if (send_ret == SOCKET_ERROR && WSAGetLastError() != WSA_IO_PENDING) {
+			delete send_over;
+		}
+		return;
+#endif
 		{
 			std::lock_guard<std::mutex> lock(send_mtx);
 			send_queue.insert(send_queue.end(), packet, packet + size);
@@ -552,6 +748,7 @@ public:
 
 		EXP_OVER* send_over = new EXP_OVER(std::move(sending_data));
 		DWORD send_bytes;
+		EXP_ADD(wsasend_calls, 1);
 		int ret = WSASend(client_, &send_over->wsabuffer, 1, &send_bytes, 0, &send_over->over, NULL);
 
 		if (ret == SOCKET_ERROR && WSAGetLastError() != WSA_IO_PENDING) {
@@ -761,6 +958,12 @@ class NPC : public BaseObject {
 public:
 	std::atomic<bool> is_active{ false };
 	std::atomic<int> fire_stacks_{ 0 };
+	NpcLuaSlot lua_slot_;
+
+	void set_inactive()
+	{
+		if (is_active.exchange(false)) EXP_ADD(active_npcs, -1);
+	}
 
 	// [SpawnMap] 스폰 데이터에서 로드되는 NPC 고유 정보
 	NpcType            _npcType  = NPC_NONE;
@@ -908,7 +1111,7 @@ public:
 		}
 
 		// 4. Lua on_timer 호용
-		NpcAction action = NpcAiManager::call_on_timer(static_cast<int>(_npcType), ctx);
+		NpcAction action = NpcAiManager::call_on_timer(static_cast<int>(_npcType), ctx, lua_slot_);
 
 		// 5. 상태 변경 브로드캐스드
 		broadcast_state_change(static_cast<NpcState>(action.new_state));
@@ -1189,6 +1392,7 @@ public:
 		{
 			return;
 		}
+		EXP_ADD(active_npcs, 1);
 
 		if (_aiState == NpcState::MERCHANT) return; // Do not schedule AI ticks for merchants
 
@@ -1788,7 +1992,7 @@ bool SESSION::proccess_packet(unsigned char* buff)
 					hit_ctx.current_state = static_cast<int>(npc->_aiState);
 					hit_ctx.target_id = id_;
 					NpcAction hit_action = NpcAiManager::call_on_hit(
-						static_cast<int>(npc->_npcType), hit_ctx, id_, actual_damage);
+						static_cast<int>(npc->_npcType), hit_ctx, id_, actual_damage, npc->lua_slot_);
 					// 어그로 타겟 갱신
 					npc->_aggroTarget = id_;
 					npc->broadcast_state_change(static_cast<NpcState>(hit_action.new_state));
@@ -1815,7 +2019,7 @@ bool SESSION::proccess_packet(unsigned char* buff)
 
 					if (npc->_hp <= 0) {
 						// Death
-						npc->is_active = false;
+						npc->set_inactive();
 						
 						// Quest Check
 						QuestData qd = get_quest_data(player_->_quest_stage);
@@ -2691,7 +2895,9 @@ void client_disconnect(int client_id)
 	std::shared_ptr<SESSION> cl = clients[client_id].exchange(nullptr);
 	if (cl == nullptr) return; 
 
+#if !EXP_METRICS
 	std::cout << "client[" << client_id << "] Disconnected.\n";
+#endif
 	
 	if (cl->player_) {
 		cl->state_ = client_state::logout;
@@ -2820,6 +3026,9 @@ void timer_thread()
 				{
 					EXP_OVER* move_over = new EXP_OVER;
 					move_over->type = io_type::npc_move;
+#if EXP_METRICS
+					move_over->event_data = top_ev;
+#endif
 					PostQueuedCompletionStatus(h_iocp, -1, top_ev.obj_id, &move_over->over);
 				}
 				break;
@@ -3001,6 +3210,11 @@ void worker_thread()
 		}
 		case io_type::npc_move:
 		{
+#if EXP_METRICS
+			EXP_ADD(timer_events, 1);
+			EXP_ADD(timer_lag_us, std::chrono::duration_cast<std::chrono::microseconds>(
+				std::chrono::system_clock::now() - o->event_data.wakeup_time).count());
+#endif
 			delete o;
 			auto npc = npcs[id].load();
 			if (!npc)
@@ -3010,7 +3224,7 @@ void worker_thread()
 
 			// AI DIE 액션(크리퍼 자폭 등) 처리
 			if (npc->_hp <= 0) {
-				npc->is_active = false;
+				npc->set_inactive();
 				// 주변 플레이어에게 제거 패킷 브로드캐스트
 				auto nearby = sector.get_objects_nearby_sector(npc->x_, npc->y_);
 				S2C_RemoveObject rm_pkt;
@@ -3050,7 +3264,7 @@ void worker_thread()
 			}
 			else
 			{
-				npc->is_active = false;
+				npc->set_inactive();
 				// 잠들기 직전 플레이어가 들어왔는지 다시 확인 (Lost Wakeup 방지)
 				if (npc->do_timer_move()) {
 					npc->wake_up();
@@ -3153,7 +3367,7 @@ void worker_thread()
 				}
 
 				if (npc->_hp <= 0) {
-					npc->is_active = false;
+					npc->set_inactive();
 					
 					// Reward to attacker if possible
 					std::shared_ptr<SESSION> attacker = clients[ev.target_id].load();
@@ -3461,7 +3675,9 @@ void worker_thread()
 						new_session->send_already_spawn_players();
 						broadcast_new_player(id);
 						new_session->state_ = client_state::playing;
+#if !EXP_METRICS
 						std::cout << "Player[" << id << "] authenticated successfully. Position: (" << result.x << ", " << result.y << ")\n";
+#endif
 					}
 					else
 					{
@@ -3536,6 +3752,9 @@ int main()
 #if ENABLE_REASSEMBLY_PROFILING
 	std::thread reassembly_report_thread(report_reassembly_cost_periodically);
 	reassembly_report_thread.detach();
+#endif
+#if EXP_METRICS
+	std::thread(report_experiment_metrics).detach();
 #endif
 
 	std::vector<std::thread> worker_threads;

@@ -61,21 +61,11 @@ void DBManager::Init(std::function<void(int, int, const DBTask&)> notifyCb) {
 		retcode = SQLSetEnvAttr(m_henv, SQL_ATTR_ODBC_VERSION, (SQLPOINTER*)SQL_OV_ODBC3, 0);
 
 		if (retcode == SQL_SUCCESS || retcode == SQL_SUCCESS_WITH_INFO) {
-			retcode = SQLAllocHandle(SQL_HANDLE_DBC, m_henv, &m_hdbc);
-
-			if (retcode == SQL_SUCCESS || retcode == SQL_SUCCESS_WITH_INFO) {
-				SQLSetConnectAttr(m_hdbc, SQL_LOGIN_TIMEOUT, (SQLPOINTER)5, 0);
-				
-				// Ensure DSN "2021180009_SGP" is correctly set up in ODBC Data Source Administrator
-				retcode = SQLConnect(m_hdbc, (SQLWCHAR*)L"2021180009_SGP_Term", SQL_NTS, (SQLWCHAR*)NULL, 0, NULL, 0);
-
-				if (retcode != SQL_SUCCESS && retcode != SQL_SUCCESS_WITH_INFO) {
-					ReportDBError(m_hdbc, SQL_HANDLE_DBC, retcode);
-					std::cout << "[DB] MSSQL 서버 연결 실패. DB 기능을 사용할 수 없습니다." << std::endl;
-					// exit(-1); // Do not exit, just let it fail gracefully if DB is not set up
-				} else {
-					std::cout << "[DB] MSSQL 서버에 성공적으로 연결되었습니다." << std::endl;
-				}
+			if (!ConnectDb(m_hdbc)) {
+				std::cout << "[DB] MSSQL 서버 연결 실패. DB 기능을 사용할 수 없습니다." << std::endl;
+				// exit(-1); // Do not exit, just let it fail gracefully if DB is not set up
+			} else {
+				std::cout << "[DB] MSSQL 서버에 성공적으로 연결되었습니다." << std::endl;
 			}
 		}
 	}
@@ -83,6 +73,39 @@ void DBManager::Init(std::function<void(int, int, const DBTask&)> notifyCb) {
 	// Register Handlers
 	m_handlers[DBTaskType::LOGIN_AUTH] = [this](DBTask& task) { HandleLoginAuth(task); };
 	m_handlers[DBTaskType::SAVE_USER_DATA] = [this](DBTask& task) { HandleSaveData(task); };
+}
+
+bool DBManager::ConnectDb(SQLHDBC& hdbc) {
+	SQLRETURN retcode = SQLAllocHandle(SQL_HANDLE_DBC, m_henv, &hdbc);
+	if (retcode != SQL_SUCCESS && retcode != SQL_SUCCESS_WITH_INFO) return false;
+
+	SQLSetConnectAttr(hdbc, SQL_LOGIN_TIMEOUT, (SQLPOINTER)5, 0);
+
+	// 성능 비교 실험은 EXP_DB_CONN 연결 문자열로 벤치마크 DB에 접속한다.
+	WCHAR conn_str[512] = {};
+	if (GetEnvironmentVariableW(L"EXP_DB_CONN", conn_str, 512) > 0) {
+		retcode = SQLDriverConnectW(hdbc, NULL, conn_str, SQL_NTS, NULL, 0, NULL, SQL_DRIVER_NOPROMPT);
+	} else {
+		// Ensure DSN "2021180009_SGP" is correctly set up in ODBC Data Source Administrator
+		retcode = SQLConnect(hdbc, (SQLWCHAR*)L"2021180009_SGP_Term", SQL_NTS, (SQLWCHAR*)NULL, 0, NULL, 0);
+	}
+
+	if (retcode != SQL_SUCCESS && retcode != SQL_SUCCESS_WITH_INFO) {
+		ReportDBError(hdbc, SQL_HANDLE_DBC, retcode);
+		return false;
+	}
+	return true;
+}
+
+SQLHDBC DBManager::CurrentDbc() {
+#if EXP_DB_SYNC
+	// 동기 모드는 워커가 동시에 쿼리하므로 스레드마다 연결을 따로 둔다.
+	thread_local SQLHDBC thread_dbc = SQL_NULL_HDBC;
+	if (thread_dbc == SQL_NULL_HDBC) ConnectDb(thread_dbc);
+	return thread_dbc;
+#else
+	return m_hdbc;
+#endif
 }
 
 void DBManager::StartDBThread() {
@@ -98,24 +121,37 @@ void DBManager::StopDBThread() {
 }
 
 void DBManager::PushTask(const DBTask& task) {
+	EXP_ADD(db_pending, 1);
+#if EXP_DB_SYNC
+	DBTask sync_task = task;
+	RunTask(sync_task);
+#else
 	m_task_queue.push(task);
+#endif
+}
+
+void DBManager::RunTask(DBTask& task) {
+	auto exp_start = EXP_NOW();
+	auto it = m_handlers.find(task.type);
+	if (it != m_handlers.end()) {
+		it->second(task); // Execute handler
+	} else {
+		std::cout << "[DB] 등록되지 않은 DB 작업 타입입니다: " << static_cast<int>(task.type) << std::endl;
+	}
+	EXP_ADD_ELAPSED_NS(db_ns, exp_start);
+	EXP_ADD(db_tasks, 1);
+	EXP_ADD(db_pending, -1);
+
+	if (m_notifyCb) {
+		m_notifyCb(task.session_id, task.ioType, task);
+	}
 }
 
 void DBManager::DBWorkerThread() {
 	while (m_db_thread_running) {
 		DBTask task;
 		if (m_task_queue.try_pop(task)) {
-			
-			auto it = m_handlers.find(task.type);
-			if (it != m_handlers.end()) {
-				it->second(task); // Execute handler
-			} else {
-				std::cout << "[DB] 등록되지 않은 DB 작업 타입입니다: " << static_cast<int>(task.type) << std::endl;
-			}
-
-			if (m_notifyCb) {
-				m_notifyCb(task.session_id, task.ioType, task);
-			}
+			RunTask(task);
 		}
 		else {
 			std::this_thread::sleep_for(std::chrono::milliseconds(10));
@@ -139,7 +175,7 @@ void DBManager::HandleLoginAuth(DBTask& task) {
 	std::wstring w_uid(user_id.begin(), user_id.end());
 
 	SQLHSTMT check_hstmt = SQL_NULL_HSTMT;
-	SQLRETURN retcode = SQLAllocHandle(SQL_HANDLE_STMT, m_hdbc, &check_hstmt);
+	SQLRETURN retcode = SQLAllocHandle(SQL_HANDLE_STMT, CurrentDbc(), &check_hstmt);
 	if (retcode != SQL_SUCCESS) {
 		ReportDBError(check_hstmt, SQL_HANDLE_STMT, retcode);
 		return;
@@ -167,7 +203,7 @@ void DBManager::HandleLoginAuth(DBTask& task) {
 
 	if (result.success) {
 		SQLHSTMT hstmt = SQL_NULL_HSTMT;
-		retcode = SQLAllocHandle(SQL_HANDLE_STMT, m_hdbc, &hstmt);
+		retcode = SQLAllocHandle(SQL_HANDLE_STMT, CurrentDbc(), &hstmt);
 		if (retcode == SQL_SUCCESS) {
 			BindUserId(hstmt, 1, w_uid, uid_ind);
 			retcode = SQLExecDirect(hstmt, (SQLWCHAR*)L"{CALL select_user_data(?)}", SQL_NTS);
@@ -233,7 +269,7 @@ void DBManager::HandleLoginAuth(DBTask& task) {
 			// 인벤토리 불러오기
 			if (result.success) {
 				SQLHSTMT inv_hstmt = SQL_NULL_HSTMT;
-				retcode = SQLAllocHandle(SQL_HANDLE_STMT, m_hdbc, &inv_hstmt);
+				retcode = SQLAllocHandle(SQL_HANDLE_STMT, CurrentDbc(), &inv_hstmt);
 				if (retcode == SQL_SUCCESS) {
 					BindUserId(inv_hstmt, 1, w_uid, uid_ind);
 					retcode = SQLExecDirect(inv_hstmt, (SQLWCHAR*)L"{CALL select_inventory_data(?)}", SQL_NTS);
@@ -255,7 +291,7 @@ void DBManager::HandleLoginAuth(DBTask& task) {
 
 				// Fetch quest data (quest_id = 1 for Main Quest)
 				SQLHSTMT quest_hstmt = SQL_NULL_HSTMT;
-				retcode = SQLAllocHandle(SQL_HANDLE_STMT, m_hdbc, &quest_hstmt);
+				retcode = SQLAllocHandle(SQL_HANDLE_STMT, CurrentDbc(), &quest_hstmt);
 				if (retcode == SQL_SUCCESS) {
 					SQLINTEGER quest_id = 1;
 					BindUserId(quest_hstmt, 1, w_uid, uid_ind);
@@ -282,7 +318,7 @@ void DBManager::HandleLoginAuth(DBTask& task) {
 
 				// Fetch skill data
 				SQLHSTMT skill_hstmt = SQL_NULL_HSTMT;
-				retcode = SQLAllocHandle(SQL_HANDLE_STMT, m_hdbc, &skill_hstmt);
+				retcode = SQLAllocHandle(SQL_HANDLE_STMT, CurrentDbc(), &skill_hstmt);
 				if (retcode == SQL_SUCCESS) {
 					BindUserId(skill_hstmt, 1, w_uid, uid_ind);
 					retcode = SQLExecDirect(skill_hstmt, (SQLWCHAR*)L"{CALL select_skill_data(?)}", SQL_NTS);
@@ -317,7 +353,7 @@ void DBManager::HandleSaveData(DBTask& task) {
 	player_data pd = std::get<player_data>(task.data);
 	
 	SQLHSTMT hstmt = SQL_NULL_HSTMT;
-	SQLRETURN retcode = SQLAllocHandle(SQL_HANDLE_STMT, m_hdbc, &hstmt);
+	SQLRETURN retcode = SQLAllocHandle(SQL_HANDLE_STMT, CurrentDbc(), &hstmt);
 	if (retcode != SQL_SUCCESS) {
 		ReportDBError(hstmt, SQL_HANDLE_STMT, retcode);
 		return;
@@ -346,7 +382,7 @@ void DBManager::HandleSaveData(DBTask& task) {
 
 	// Save quest data (quest_id = 1 for Main Quest)
 	SQLHSTMT quest_hstmt = SQL_NULL_HSTMT;
-	retcode = SQLAllocHandle(SQL_HANDLE_STMT, m_hdbc, &quest_hstmt);
+	retcode = SQLAllocHandle(SQL_HANDLE_STMT, CurrentDbc(), &quest_hstmt);
 	if (retcode == SQL_SUCCESS) {
 		SQLINTEGER quest_id = 1, stage = pd.quest_stage, progress = pd.quest_progress;
 		BindUserId(quest_hstmt, 1, w_uid, uid_ind);
@@ -362,7 +398,7 @@ void DBManager::HandleSaveData(DBTask& task) {
 
 	// Save skill data
 	SQLHSTMT skill_hstmt = SQL_NULL_HSTMT;
-	retcode = SQLAllocHandle(SQL_HANDLE_STMT, m_hdbc, &skill_hstmt);
+	retcode = SQLAllocHandle(SQL_HANDLE_STMT, CurrentDbc(), &skill_hstmt);
 	if (retcode == SQL_SUCCESS) {
 		SQLINTEGER sp = pd.unspent_sp, mask = pd.skills_mask;
 		BindUserId(skill_hstmt, 1, w_uid, uid_ind);
@@ -378,7 +414,7 @@ void DBManager::HandleSaveData(DBTask& task) {
 	// Save inventory: 한 번 Prepare 후 바인딩된 변수만 바꿔가며 아이템 수만큼 Execute
 	if (!pd.inventory.empty()) {
 		SQLHSTMT inv_hstmt = SQL_NULL_HSTMT;
-		retcode = SQLAllocHandle(SQL_HANDLE_STMT, m_hdbc, &inv_hstmt);
+		retcode = SQLAllocHandle(SQL_HANDLE_STMT, CurrentDbc(), &inv_hstmt);
 		if (retcode == SQL_SUCCESS) {
 			retcode = SQLPrepare(inv_hstmt, (SQLWCHAR*)L"{CALL save_inventory_data(?, ?, ?)}", SQL_NTS);
 			if (retcode == SQL_SUCCESS || retcode == SQL_SUCCESS_WITH_INFO) {

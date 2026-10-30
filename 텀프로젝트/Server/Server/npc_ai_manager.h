@@ -10,12 +10,22 @@
 //   - C2S_ATTACK 처리 시 on_hit(ctx, damage) 호출 → 어그로 전환 등 반응
 // =============================================================================
 
+#include <mutex>
 #include <string>
 #include <unordered_map>
 #include <windows.h>
 #include "lua-5.5.0/include/lua.hpp"
 #pragma comment(lib, "lua-5.5.0/lua55.lib")
 #include "Protocol.h"
+#include "ExperimentConfig.h"
+
+// 성능 비교 실험: EXP_LUA_MODE 1에서 NPC마다 갖는 Lua VM과 락
+struct NpcLuaSlot {
+#if EXP_LUA_MODE == 1
+	std::mutex mtx;
+	lua_State* state = nullptr;
+#endif
+};
 
 // ── Lua AI에 넘기는 NPC 컨텍스트 ─────────────────────────────────────────────
 struct NpcAiContext {
@@ -80,39 +90,83 @@ public:
 	// ── 워커 스레드에서 호출: 해당 스레드의 Lua State 초기화 ─────────────────
 	// 각 워커 스레드 시작 시 한 번 호출하면 thread_local pool에 Lua VM 생성.
 	static void init_thread_states() {
+#if EXP_LUA_MODE == 0
 		auto& pool = get_pool();
 		for (auto& [type_id, path] : script_paths()) {
 			if (pool.contains(type_id)) continue; // 이미 있음
-			lua_State* L = luaL_newstate();
-			luaL_openlibs(L);
-
-			// 유틸 함수 등록 (math.random 사용 가능하게 열어둠)
-			if (luaL_dofile(L, path.c_str()) != LUA_OK) {
-				std::cerr << "[NpcAI][ERROR] Lua 로드 실패 type=" << type_id
-				          << " : " << lua_tostring(L, -1) << std::endl;
-				lua_close(L);
-				continue;
-			}
-			pool[type_id] = L;
+			lua_State* L = create_state(type_id, path);
+			if (L) pool[type_id] = L;
 		}
+#endif
 	}
 
 	// ── on_timer 호출 (EVENT_MOVE 타이머 만료 시) ────────────────────────────
-	static NpcAction call_on_timer(int npc_type, const NpcAiContext& ctx) {
-		return call_hook(npc_type, "on_timer", ctx, -1, 0);
+	static NpcAction call_on_timer(int npc_type, const NpcAiContext& ctx, NpcLuaSlot& slot) {
+		return run_hook(npc_type, "on_timer", ctx, -1, 0, slot);
 	}
 
 	// ── on_hit 호출 (NPC가 공격받았을 때) ────────────────────────────────────
-	static NpcAction call_on_hit(int npc_type, const NpcAiContext& ctx, int attacker_id, int damage) {
-		return call_hook(npc_type, "on_hit", ctx, attacker_id, damage);
+	static NpcAction call_on_hit(int npc_type, const NpcAiContext& ctx, int attacker_id, int damage, NpcLuaSlot& slot) {
+		return run_hook(npc_type, "on_hit", ctx, attacker_id, damage, slot);
 	}
 
 	// ── on_spawn 호출 (NPC 최초 스폰 / 리스폰 시) ───────────────────────────
-	static NpcAction call_on_spawn(int npc_type, const NpcAiContext& ctx) {
-		return call_hook(npc_type, "on_spawn", ctx, -1, 0);
+	static NpcAction call_on_spawn(int npc_type, const NpcAiContext& ctx, NpcLuaSlot& slot) {
+		return run_hook(npc_type, "on_spawn", ctx, -1, 0, slot);
 	}
 
 private:
+	static lua_State* create_state(int type_id, const std::string& path) {
+		lua_State* L = luaL_newstate();
+		luaL_openlibs(L);
+
+		// 유틸 함수 등록 (math.random 사용 가능하게 열어둠)
+		if (luaL_dofile(L, path.c_str()) != LUA_OK) {
+			std::cerr << "[NpcAI][ERROR] Lua 로드 실패 type=" << type_id
+			          << " : " << lua_tostring(L, -1) << std::endl;
+			lua_close(L);
+			return nullptr;
+		}
+		EXP_ADD(lua_states, 1);
+		return L;
+	}
+
+	// 동시성 모델에 맞는 lua_State를 골라 훅을 호출한다.
+	static NpcAction run_hook(int npc_type, const char* func_name, const NpcAiContext& ctx,
+	                          int extra_id, int extra_int, NpcLuaSlot& slot)
+	{
+		EXP_ADD(lua_calls, 1);
+		auto exp_start = EXP_NOW();
+#if EXP_LUA_MODE == 1
+		// Locking: NPC별 VM을 첫 호출 때 만들고 mutex로 보호
+		std::lock_guard<std::mutex> lock(slot.mtx);
+		EXP_ADD_ELAPSED_NS(lua_wait_ns, exp_start);
+		if (!slot.state) {
+			auto it = script_paths().find(npc_type);
+			if (it != script_paths().end()) slot.state = create_state(npc_type, it->second);
+		}
+		lua_State* L = slot.state;
+#elif EXP_LUA_MODE == 2
+		// Locking: 타입별 VM을 전체 NPC가 공유하고 전역 락 하나로 보호
+		static std::mutex shared_mtx;
+		std::lock_guard<std::mutex> lock(shared_mtx);
+		EXP_ADD_ELAPSED_NS(lua_wait_ns, exp_start);
+		static std::unordered_map<int, lua_State*> shared_pool;
+		if (shared_pool.empty()) {
+			for (auto& [type_id, path] : script_paths()) {
+				shared_pool[type_id] = create_state(type_id, path);
+			}
+		}
+		auto it = shared_pool.find(npc_type);
+		lua_State* L = it != shared_pool.end() ? it->second : nullptr;
+#else
+		lua_State* L = get_state(npc_type);
+#endif
+		NpcAction result = call_hook(L, func_name, ctx, extra_id, extra_int);
+		EXP_ADD_ELAPSED_NS(lua_ns, exp_start);
+		return result;
+	}
+
 	// thread_local lua_State 풀 (타입ID → lua_State*)
 	static std::unordered_map<int, lua_State*>& get_pool() {
 		thread_local std::unordered_map<int, lua_State*> pool;
@@ -126,11 +180,10 @@ private:
 	}
 
 	// ── 공통 훅 호출 헬퍼 ────────────────────────────────────────────────────
-	static NpcAction call_hook(int npc_type, const char* func_name,
+	static NpcAction call_hook(lua_State* L, const char* func_name,
 	                           const NpcAiContext& ctx, int extra_id, int extra_int)
 	{
 		NpcAction result;
-		lua_State* L = get_state(npc_type);
 		if (!L) return result;
 
 		lua_getglobal(L, func_name);
