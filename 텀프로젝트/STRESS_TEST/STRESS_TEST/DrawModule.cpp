@@ -1,4 +1,4 @@
-/*
+﻿/*
 *		This Code Was Created By Jeff Molofee 2000
 *		Modified by Shawn T. to handle (%3.2f, num) parameters.
 *		A HUGE Thanks To Fredric Echols For Cleaning Up
@@ -506,12 +506,18 @@ int WINAPI WinMain(HINSTANCE	hInstance,			// Instance
 
 int main()
 {
-	printf("Enter server IP (default 127.0.0.1): ");
+	// 성능 비교 실험은 EXP_SERVER_IP로 주소를 받아 프롬프트를 건너뛴다.
 	char input_ip[16];
-	fgets(input_ip, sizeof(input_ip), stdin);
-	if (input_ip[0] != '\n' && input_ip[0] != '\0') {
-		input_ip[strcspn(input_ip, "\n")] = 0;
+	if (GetEnvironmentVariableA("EXP_SERVER_IP", input_ip, sizeof(input_ip)) > 0) {
 		strcpy_s(g_server_ip, input_ip);
+	}
+	else {
+		printf("Enter server IP (default 127.0.0.1): ");
+		fgets(input_ip, sizeof(input_ip), stdin);
+		if (input_ip[0] != '\n' && input_ip[0] != '\0') {
+			input_ip[strcspn(input_ip, "\n")] = 0;
+			strcpy_s(g_server_ip, input_ip);
+		}
 	}
 
 	WinMain(0, 0, 0, 0);

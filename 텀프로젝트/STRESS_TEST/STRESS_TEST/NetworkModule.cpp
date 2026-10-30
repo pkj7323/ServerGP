@@ -1,4 +1,4 @@
-#define _WINSOCK_DEPRECATED_NO_WARNINGS
+﻿#define _WINSOCK_DEPRECATED_NO_WARNINGS
 
 #include <WinSock2.h>
 #include <winsock.h>
@@ -14,6 +14,9 @@
 #include <array>
 #include <memory>
 #include <unordered_map>
+#include <deque>
+#include <string>
+#include <fstream>
 
 using namespace std;
 using namespace chrono;
@@ -57,6 +60,8 @@ struct CLIENT {
 	int prev_packet_data;
 	int curr_packet_size;
 	high_resolution_clock::time_point last_move_time;
+	high_resolution_clock::time_point login_start;
+	atomic_int login_state; // DB 부하 봇 전용. 0: 대기, 1: 성공, 2: 실패
 };
 
 unordered_map<int, int> client_map; // server_player_id -> local client index
@@ -72,6 +77,83 @@ vector <thread*> worker_threads;
 thread test_thread;
 
 float point_cloud[MAX_TEST * 2];
+
+// --- 성능 비교 실험 설정. EXP_BOTS가 없으면 기존 자동 조절 동작을 그대로 쓴다. ---
+struct ExpBotConfig {
+	int bots = 0;           // EXP_BOTS: 고정 인원
+	int connect_ms = 30;    // EXP_CONNECT_MS: 접속 간격
+	int duration_s = 0;     // EXP_DURATION: 지나면 프로세스 종료
+	int seed = 1;           // EXP_SEED: 이동 난수 시드
+	int db_rate = 0;        // EXP_DB_RATE: 초당 로그인 수 (DBSIM_ 계정)
+	int db_users = 1000;    // EXP_DB_USERS: 시드해 둔 DBSIM_ 계정 수
+	int db_hold_ms = 1000;  // EXP_DB_HOLD_MS: 로그인 후 유지 시간
+	string csv = "bot_metrics.csv"; // EXP_BOT_CSV
+} g_exp;
+
+static int Exp_Env_Int(const char* name, int fallback)
+{
+	char value[32];
+	DWORD len = GetEnvironmentVariableA(name, value, sizeof(value));
+	return (len > 0 && len < sizeof(value)) ? atoi(value) : fallback;
+}
+
+constexpr int EXP_BUCKET_US = 100;
+constexpr int EXP_BUCKETS = 100000; // 100us 단위로 10초까지
+
+struct ExpHistogram {
+	vector<atomic<int>> buckets;
+
+	ExpHistogram() : buckets(EXP_BUCKETS) {}
+
+	void Add(long long us)
+	{
+		int i = static_cast<int>(us / EXP_BUCKET_US);
+		if (i >= EXP_BUCKETS) i = EXP_BUCKETS - 1;
+		buckets[i].fetch_add(1, memory_order_relaxed);
+	}
+};
+ExpHistogram g_rtt_hist;
+ExpHistogram g_login_hist;
+atomic<long long> g_moves_sent{ 0 };
+atomic<long long> g_recv_bytes{ 0 };
+atomic<long long> g_login_ok{ 0 };
+atomic<long long> g_login_fail{ 0 };
+atomic<long long> g_login_timeout{ 0 };
+
+struct ExpPercentiles {
+	long long count = 0;
+	double avg = 0, p50 = 0, p95 = 0, p99 = 0, max = 0;
+};
+
+// 히스토그램을 비우면서 ms 단위 백분위를 구한다.
+static ExpPercentiles Exp_Drain(ExpHistogram& hist)
+{
+	static thread_local vector<int> counts(EXP_BUCKETS);
+	ExpPercentiles r;
+	double total_us = 0;
+	for (int i = 0; i < EXP_BUCKETS; ++i) {
+		counts[i] = hist.buckets[i].exchange(0, memory_order_relaxed);
+		r.count += counts[i];
+		total_us += counts[i] * (i + 0.5) * EXP_BUCKET_US;
+	}
+	if (r.count == 0) return r;
+	r.avg = total_us / r.count / 1000.0;
+	const long long p50_at = (r.count * 50 + 99) / 100;
+	const long long p95_at = (r.count * 95 + 99) / 100;
+	const long long p99_at = (r.count * 99 + 99) / 100;
+	long long seen = 0;
+	bool got50 = false, got95 = false, got99 = false;
+	for (int i = 0; i < EXP_BUCKETS; ++i) {
+		if (counts[i] == 0) continue;
+		seen += counts[i];
+		const double ms = (i + 0.5) * EXP_BUCKET_US / 1000.0;
+		if (!got50 && seen >= p50_at) { r.p50 = ms; got50 = true; }
+		if (!got95 && seen >= p95_at) { r.p95 = ms; got95 = true; }
+		if (!got99 && seen >= p99_at) { r.p99 = ms; got99 = true; }
+		r.max = ms;
+	}
+	return r;
+}
 
 struct ALIEN {
 	int id;
@@ -137,16 +219,24 @@ void ProcessPacket(int ci, unsigned char packet[])
 			// 이미 연결 시 C2S_LOGIN을 보냈으므로 여기서 다시 보내면 무한 루프 발생. 생략함.
 		}
 		else {
+			if (ci >= MAX_TEST) {
+				g_login_fail++;
+				g_clients[ci].login_state = 2;
+			}
 			DisconnectClient(ci);
 		}
 		break;
 	}
 	case S2C_AVATAR_INFO:
 	{
-		// 스폰 성공 → 연결 완료로 처리
-		g_clients[ci].connected = true;
-		++active_clients;
 		S2C_AvatarInfo* info = reinterpret_cast<S2C_AvatarInfo*>(packet);
+		if (ci >= MAX_TEST) {
+			// DB 부하 봇: 로그인 지연만 기록하고 이동은 하지 않는다.
+			g_login_hist.Add(duration_cast<microseconds>(high_resolution_clock::now() - g_clients[ci].login_start).count());
+			g_login_ok++;
+			g_clients[ci].login_state = 1;
+			break;
+		}
 		{
 			lock_guard<mutex> lock(client_map_mutex);
 			client_map[info->playerId] = ci; // server player id -> local index
@@ -154,29 +244,26 @@ void ProcessPacket(int ci, unsigned char packet[])
 		g_clients[ci].id = info->playerId;
 		g_clients[ci].x  = info->x;
 		g_clients[ci].y  = info->y;
+		// 스폰 성공 → 연결 완료로 처리
+		g_clients[ci].connected = true;
+		++active_clients;
 		break;
 	}
 	case S2C_MOVE_OBJECT:
 	{
 		S2C_MoveObject* move_packet = reinterpret_cast<S2C_MoveObject*>(packet);
 		
-		int my_id = -1;
-		{
-			lock_guard<mutex> lock(client_map_mutex);
-			if (client_map.count(move_packet->object_id) > 0) {
-				my_id = client_map[move_packet->object_id];
-			}
-		}
-		
-		// client_map에 없는 object_id는 다른 플레이어 이동이므로 무시
-		if (my_id == -1) break;
-		if (my_id < 0 || my_id >= MAX_CLIENTS) break;
+		// 다른 플레이어 이동은 무시한다. 봇 쪽 공용 락이 병목이 되지 않도록 락을 잡지 않는다.
+		if (move_packet->object_id != g_clients[ci].id) break;
+		const int my_id = ci;
 
-		// 내 캐릭터 이동이면 RTT 측정
-		if (my_id == ci && move_packet->move_time != 0) {
-			long long now_ms = duration_cast<milliseconds>(high_resolution_clock::now().time_since_epoch()).count();
-			long long d_ms = now_ms - (long long)move_packet->move_time;
-			if (d_ms > 0 && d_ms < 10000) { // 비정상 값 필터링
+		// 내 캐릭터 이동이면 RTT 측정 (move_time은 us 하위 32비트, 차이는 부호 없는 연산으로 구한다)
+		if (move_packet->move_time != 0) {
+			const unsigned now_us = static_cast<unsigned>(duration_cast<microseconds>(high_resolution_clock::now().time_since_epoch()).count());
+			const unsigned rtt_us = now_us - static_cast<unsigned>(move_packet->move_time);
+			if (rtt_us < 10000000u) { // 비정상 값 필터링
+				g_rtt_hist.Add(rtt_us);
+				const int d_ms = static_cast<int>(rtt_us / 1000);
 				if (global_delay < d_ms) global_delay++;
 				else if (global_delay > d_ms) global_delay--;
 			}
@@ -214,6 +301,7 @@ void Worker_Thread()
 			continue;
 		}
 		if (OP_RECV == over->event_type) {
+			g_recv_bytes.fetch_add(io_size, memory_order_relaxed);
 			//std::cout << "RECV from Client :" << ci;
 			//std::cout << "  IO_SIZE : " << io_size << std::endl;
 			unsigned char* buf = g_clients[ci].recv_over.IOCP_buf;
@@ -274,33 +362,34 @@ constexpr int DELAY_LIMIT = 100;
 constexpr int DELAY_LIMIT2 = 150;
 constexpr int ACCEPT_DELY = 30;
 
-void Adjust_Number_Of_Client()
+// 기존 자동 조절: 지금 접속을 하나 더 늘려도 되는지 판단한다.
+static bool Should_Connect_Adaptive()
 {
 	static int delay_multiplier = 1;
 	static int max_limit = MAX_TEST;
 	static auto last_limit_increase = high_resolution_clock::now();
 
-	if (active_clients >= MAX_TEST) return;
-	if (num_connections >= MAX_CLIENTS) return;
+	if (active_clients >= MAX_TEST) return false;
+	if (num_connections >= MAX_TEST) return false;
 
 	auto duration = high_resolution_clock::now() - last_connect_time;
-	if (ACCEPT_DELY * delay_multiplier > duration_cast<milliseconds>(duration).count()) return;
+	if (ACCEPT_DELY * delay_multiplier > duration_cast<milliseconds>(duration).count()) return false;
 
 	int t_delay = global_delay;
 	if (DELAY_LIMIT2 < t_delay) {
 		// 딜레이 한계 돌파: 상한선을 현재 인원의 95%로 동적 하향 조정
 		max_limit = active_clients - (active_clients / 20);
-		if (100 > active_clients) return;
-		if (ACCEPT_DELY * 10 > duration_cast<milliseconds>(duration).count()) return;
+		if (100 > active_clients) return false;
+		if (ACCEPT_DELY * 10 > duration_cast<milliseconds>(duration).count()) return false;
 		last_connect_time = high_resolution_clock::now();
 		DisconnectClient(client_to_close);
 		++client_to_close;
-		return;
+		return false;
 	}
 	else if (DELAY_LIMIT < t_delay) {
 		delay_multiplier = 10;
 		// 주의 구간: 상한선을 넘으면 추가 접속 금지
-		if (active_clients >= max_limit) return;
+		if (active_clients >= max_limit) return false;
 	}
 	else {
 		delay_multiplier = 1;
@@ -310,10 +399,19 @@ void Adjust_Number_Of_Client()
 			max_limit++;
 			last_limit_increase = high_resolution_clock::now();
 		}
-		if (active_clients >= max_limit) return;
+		if (active_clients >= max_limit) return false;
 	}
-	last_connect_time = high_resolution_clock::now();
-	g_clients[num_connections].client_socket = WSASocketW(AF_INET, SOCK_STREAM, IPPROTO_TCP, NULL, 0, WSA_FLAG_OVERLAPPED);
+	return true;
+}
+
+// 소켓을 만들어 접속하고 C2S_LOGIN을 보낸다.
+static bool Connect_Slot(int slot, const char* user_id)
+{
+	g_clients[slot].client_socket = WSASocketW(AF_INET, SOCK_STREAM, IPPROTO_TCP, NULL, 0, WSA_FLAG_OVERLAPPED);
+
+	// 서버와 같게 맞춘다. 없으면 Nagle과 지연 ACK가 겹쳐 RTT에 200ms대 튐이 섞일 수 있다.
+	BOOL no_delay = TRUE;
+	setsockopt(g_clients[slot].client_socket, IPPROTO_TCP, TCP_NODELAY, (const char*)&no_delay, sizeof(no_delay));
 
 	SOCKADDR_IN ServerAddr;
 	ZeroMemory(&ServerAddr, sizeof(SOCKADDR_IN));
@@ -322,53 +420,69 @@ void Adjust_Number_Of_Client()
 	ServerAddr.sin_addr.s_addr = inet_addr(g_server_ip);
 
 
-	int Result = WSAConnect(g_clients[num_connections].client_socket, (sockaddr*)&ServerAddr, sizeof(ServerAddr), NULL, NULL, NULL, NULL);
+	int Result = WSAConnect(g_clients[slot].client_socket, (sockaddr*)&ServerAddr, sizeof(ServerAddr), NULL, NULL, NULL, NULL);
 	if (0 != Result) {
 		error_display("WSAConnect : ", GetLastError());
 	}
 
-	g_clients[num_connections].curr_packet_size = 0;
-	g_clients[num_connections].prev_packet_data = 0;
-	ZeroMemory(&g_clients[num_connections].recv_over, sizeof(g_clients[num_connections].recv_over));
-	g_clients[num_connections].recv_over.event_type = OP_RECV;
-	g_clients[num_connections].recv_over.wsabuf.buf =
-		reinterpret_cast<CHAR*>(g_clients[num_connections].recv_over.IOCP_buf);
-	g_clients[num_connections].recv_over.wsabuf.len = sizeof(g_clients[num_connections].recv_over.IOCP_buf);
+	g_clients[slot].curr_packet_size = 0;
+	g_clients[slot].prev_packet_data = 0;
+	ZeroMemory(&g_clients[slot].recv_over, sizeof(g_clients[slot].recv_over));
+	g_clients[slot].recv_over.event_type = OP_RECV;
+	g_clients[slot].recv_over.wsabuf.buf =
+		reinterpret_cast<CHAR*>(g_clients[slot].recv_over.IOCP_buf);
+	g_clients[slot].recv_over.wsabuf.len = sizeof(g_clients[slot].recv_over.IOCP_buf);
 
 	DWORD recv_flag = 0;
-	CreateIoCompletionPort(reinterpret_cast<HANDLE>(g_clients[num_connections].client_socket), g_hiocp, num_connections, 0);
+	CreateIoCompletionPort(reinterpret_cast<HANDLE>(g_clients[slot].client_socket), g_hiocp, slot, 0);
 
-	int ret = WSARecv(g_clients[num_connections].client_socket, &g_clients[num_connections].recv_over.wsabuf, 1,
-		NULL, &recv_flag, &g_clients[num_connections].recv_over.over, NULL);
+	int ret = WSARecv(g_clients[slot].client_socket, &g_clients[slot].recv_over.wsabuf, 1,
+		NULL, &recv_flag, &g_clients[slot].recv_over.over, NULL);
 	if (SOCKET_ERROR == ret) {
 		int err_no = WSAGetLastError();
 		if (err_no != WSA_IO_PENDING)
 		{
 			error_display("RECV ERROR", err_no);
-			goto fail_to_connect;
+			return false;
 		}
 	}
 
 	// 연결 직후 즉시 C2S_LOGIN 전송 (서버는 먼저 보내지 않음)
-	{
-		C2S_Login l_packet;
-		memset(&l_packet, 0, sizeof(l_packet));
-		sprintf_s(l_packet.username, "DUMMY_%d", (int)num_connections);
-		sprintf_s(l_packet.user_id,  "DUMMY_%d", (int)num_connections);
-		l_packet.size = sizeof(l_packet);
-		l_packet.type = C2S_LOGIN;
-		SendPacket(num_connections, &l_packet);
-	}
+	C2S_Login l_packet;
+	memset(&l_packet, 0, sizeof(l_packet));
+	sprintf_s(l_packet.username, "%s", user_id);
+	sprintf_s(l_packet.user_id, "%s", user_id);
+	l_packet.size = sizeof(l_packet);
+	l_packet.type = C2S_LOGIN;
+	SendPacket(slot, &l_packet);
+	return true;
+}
 
-	num_connections++;
-fail_to_connect:
-	return;
+void Adjust_Number_Of_Client()
+{
+	if (g_exp.bots > 0) {
+		if (num_connections >= g_exp.bots) return;
+		auto since_last = high_resolution_clock::now() - last_connect_time;
+		if (g_exp.connect_ms > duration_cast<milliseconds>(since_last).count()) return;
+	}
+	else if (!Should_Connect_Adaptive()) {
+		return;
+	}
+	last_connect_time = high_resolution_clock::now();
+
+	char user_id[32];
+	sprintf_s(user_id, "DUMMY_%d", (int)num_connections);
+	if (Connect_Slot(num_connections, user_id)) {
+		num_connections++;
+	}
 }
 
 void Test_Thread()
 {
+	srand(g_exp.seed);
 	while (true) {
 		//Sleep(max(20, global_delay));
+		if (g_exp.bots > 0) Sleep(1); // 고정 인원 측정 때는 봇이 코어 하나를 다 먹지 않게 한다
 		Adjust_Number_Of_Client();
 
 		for (int i = 0; i < num_connections; ++i) {
@@ -387,14 +501,80 @@ void Test_Thread()
 			}
 			my_packet.x = dx;
 			my_packet.y = dy;
-			my_packet.move_time = static_cast<unsigned>(duration_cast<milliseconds>(high_resolution_clock::now().time_since_epoch()).count());
+			my_packet.move_time = static_cast<unsigned>(duration_cast<microseconds>(high_resolution_clock::now().time_since_epoch()).count());
 			SendPacket(i, &my_packet);
+			g_moves_sent.fetch_add(1, memory_order_relaxed);
 		}
+	}
+}
+
+// DB 부하: DBSIM_ 계정으로 접속 → 로그인(DB 조회) → 유지 → 해제(DB 저장)를 일정 속도로 반복한다.
+// 슬롯은 재사용하지 않는다. 닫힌 소켓의 완료 통지가 새 연결과 섞이지 않게 하기 위해서다.
+void DB_Churn_Thread()
+{
+	struct Live { int slot; high_resolution_clock::time_point start; };
+	deque<Live> live;
+	int next_slot = MAX_TEST;
+	int seq = 0;
+	const auto interval = microseconds(1000000 / g_exp.db_rate);
+	auto next_time = high_resolution_clock::now();
+
+	while (next_slot < MAX_CLIENTS || !live.empty()) {
+		auto now = high_resolution_clock::now();
+		if (now >= next_time && next_slot < MAX_CLIENTS) {
+			next_time += interval;
+			int slot = next_slot++;
+			char user_id[32];
+			sprintf_s(user_id, "DBSIM_%d", seq++ % g_exp.db_users);
+			g_clients[slot].login_state = 0;
+			g_clients[slot].login_start = now;
+			if (Connect_Slot(slot, user_id)) {
+				live.push_back({ slot, now });
+			}
+		}
+		while (!live.empty()) {
+			const Live& front = live.front();
+			auto elapsed = duration_cast<milliseconds>(now - front.start).count();
+			const int state = g_clients[front.slot].login_state;
+			const bool timed_out = elapsed >= 10000;
+			if (!(timed_out || (state != 0 && elapsed >= g_exp.db_hold_ms))) break;
+			if (state == 0) g_login_timeout++;
+			closesocket(g_clients[front.slot].client_socket);
+			live.pop_front();
+		}
+		Sleep(1);
+	}
+}
+
+void Exp_Report_Thread()
+{
+	ofstream csv(g_exp.csv);
+	csv << "sec,active,rtt_samples,rtt_avg_ms,rtt_p50_ms,rtt_p95_ms,rtt_p99_ms,rtt_max_ms,moves_sent,recv_bytes,"
+		"login_ok,login_fail,login_timeout,login_p50_ms,login_p99_ms\n";
+	for (int sec = 1;; ++sec) {
+		Sleep(1000);
+		const ExpPercentiles rtt = Exp_Drain(g_rtt_hist);
+		const ExpPercentiles login = Exp_Drain(g_login_hist);
+		csv << sec << ',' << active_clients.load() << ',' << rtt.count << ',' << rtt.avg << ',' << rtt.p50 << ','
+			<< rtt.p95 << ',' << rtt.p99 << ',' << rtt.max << ',' << g_moves_sent.exchange(0) << ','
+			<< g_recv_bytes.exchange(0) << ',' << g_login_ok.exchange(0) << ',' << g_login_fail.exchange(0) << ','
+			<< g_login_timeout.exchange(0) << ',' << login.p50 << ',' << login.p99 << endl;
+		if (g_exp.duration_s > 0 && sec >= g_exp.duration_s) ExitProcess(0);
 	}
 }
 
 void InitializeNetwork()
 {
+	g_exp.bots = Exp_Env_Int("EXP_BOTS", 0);
+	g_exp.connect_ms = Exp_Env_Int("EXP_CONNECT_MS", g_exp.connect_ms);
+	g_exp.duration_s = Exp_Env_Int("EXP_DURATION", 0);
+	g_exp.seed = Exp_Env_Int("EXP_SEED", 1);
+	g_exp.db_rate = Exp_Env_Int("EXP_DB_RATE", 0);
+	g_exp.db_users = Exp_Env_Int("EXP_DB_USERS", g_exp.db_users);
+	g_exp.db_hold_ms = Exp_Env_Int("EXP_DB_HOLD_MS", g_exp.db_hold_ms);
+	char csv_path[MAX_PATH];
+	if (GetEnvironmentVariableA("EXP_BOT_CSV", csv_path, MAX_PATH) > 0) g_exp.csv = csv_path;
+
 	for (auto& cl : g_clients) {
 		cl.connected = false;
 		cl.id = INVALID_ID;
@@ -413,6 +593,10 @@ void InitializeNetwork()
 		worker_threads.push_back(new std::thread{ Worker_Thread });
 
 	test_thread = thread{ Test_Thread };
+	if (g_exp.bots > 0) {
+		thread{ Exp_Report_Thread }.detach();
+		if (g_exp.db_rate > 0) thread{ DB_Churn_Thread }.detach();
+	}
 }
 
 void ShutdownNetwork()

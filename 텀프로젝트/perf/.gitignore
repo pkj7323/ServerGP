@@ -1,0 +1,6 @@
+results/
+results_smoke/
+results_ramp/
+bot_package/
+bot_package.zip
+__pycache__/
