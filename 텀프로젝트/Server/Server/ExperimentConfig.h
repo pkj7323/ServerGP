@@ -16,7 +16,7 @@
 #define EXP_SECTOR_BRUTE 0    // 1: 격자 없이 전체 객체를 선형 탐색
 #endif
 #ifndef EXP_SEND_PER_PACKET
-#define EXP_SEND_PER_PACKET 0 // 1: 패킷마다 WSASend (전송 중 합치기 끄기)
+#define EXP_SEND_PER_PACKET 0 // 1: 패킷마다 WSASend (묶음 전송 끄기)
 #endif
 #ifndef EXP_LUA_MODE
 #define EXP_LUA_MODE 0        // 0: thread_local 풀, 1: NPC별 state+mutex, 2: 타입별 state+전역 락

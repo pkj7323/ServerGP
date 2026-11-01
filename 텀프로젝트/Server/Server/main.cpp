@@ -145,8 +145,9 @@ void error_display(const std::wstring& msg, int err_no)
 constexpr int BUF_SIZE = 1024;
 constexpr int VIEW_RANGE = 5;
 constexpr int SECTOR_SIZE = 10;
-constexpr int MOVE_COOL_TIME = 500; // NPC 이동 쿨타임 (밀리초)
-constexpr int MOVE_COOL_TIME_VARIATION = 0;
+constexpr int MOVE_COOL_TIME = 1000; // NPC 이동 쿨타임 (밀리초)
+constexpr int MOVE_COOL_TIME_VARIATION = 200; // 같이 깨어난 NPC가 계속 같은 시점에 움직이지 않도록 흩어 준다
+constexpr int SEND_GAP_MS = 30; // 세션별 최소 전송 간격. 이 안에 들어온 패킷은 모아서 WSASend 한 번으로 보낸다
 
 std::atomic<int> player_index = 1;
 std::atomic<int> npc_index = 20000;
@@ -159,6 +160,7 @@ constexpr int EVENT_RESPAWN = -2;
 constexpr int EVENT_PROJECTILE = -3;
 constexpr int EVENT_PLAYER_RESPAWN = -4;
 constexpr int EVENT_NPC_FIRE_DAMAGE = -5;
+constexpr int EVENT_SEND_FLUSH = -6;
 struct event_type {
 	int obj_id = -1;
 	std::chrono::time_point<std::chrono::system_clock> wakeup_time;
@@ -187,6 +189,7 @@ enum class io_type
 	npc_projectile,
 	player_respawn,
 	npc_fire_damage,
+	send_flush,
 	db_player_auth,
 	db_save_position,
 	count,
@@ -264,6 +267,7 @@ static bool is_player_id(int id)
 
 // event_type and EVENT constants moved to top
 concurrency::concurrent_priority_queue<event_type> timer_queue;
+concurrency::concurrent_priority_queue<event_type> send_timer_queue; // 전송 예약이 NPC 타이머를 밀지 않도록 분리한다
 struct cell {
 	std::unordered_set<int> objects;
 	std::shared_mutex mtx; // 섹터 전용 Read-Write Lock
@@ -662,6 +666,8 @@ public:
 	std::mutex send_mtx;
 	std::vector<char> send_queue;
 	std::atomic<bool> is_sending{ false };
+	std::atomic<std::chrono::steady_clock::rep> last_send_tick{ 0 };
+	std::atomic<bool> flush_scheduled{ false };
 
 	SESSION()
 	{
@@ -728,10 +734,45 @@ public:
 			send_queue.insert(send_queue.end(), packet, packet + size);
 		}
 
-		bool expected = false;
-		if (is_sending.compare_exchange_strong(expected, true)) {
-			flush_send();
+		send_or_schedule();
+	}
+
+	void send_or_schedule()
+	{
+		using namespace std::chrono;
+		const auto last = steady_clock::duration(last_send_tick.load(std::memory_order_relaxed));
+		const auto since_last = steady_clock::now().time_since_epoch() - last;
+		const auto gap = milliseconds(SEND_GAP_MS);
+
+		if (since_last >= gap) {
+			bool expected = false;
+			if (is_sending.compare_exchange_strong(expected, true)) {
+				flush_send();
+				return;
+			}
 		}
+
+		// 뒤따르는 패킷이 없어도 큐가 비워지도록 세션당 하나만 예약한다.
+		bool expected = false;
+		if (flush_scheduled.compare_exchange_strong(expected, true)) {
+			const auto wait = std::max<steady_clock::duration>(gap - since_last, milliseconds(1));
+			event_type ev;
+			ev.obj_id = id_;
+			ev.event_id = EVENT_SEND_FLUSH;
+			ev.wakeup_time = system_clock::now() + duration_cast<system_clock::duration>(wait);
+			send_timer_queue.push(ev);
+		}
+	}
+
+	void on_send_flush_timer()
+	{
+		// 플래그를 먼저 내려야 그사이 들어온 패킷의 예약이 사라지지 않는다.
+		flush_scheduled = false;
+		{
+			std::lock_guard<std::mutex> lock(send_mtx);
+			if (send_queue.empty()) return;
+		}
+		send_or_schedule();
 	}
 
 	void flush_send()
@@ -745,6 +786,8 @@ public:
 			}
 			sending_data.swap(send_queue);
 		}
+		// 큐가 비어 있으면 위에서 돌아가므로, 실제로 보낼 때만 시각이 갱신된다.
+		last_send_tick.store(std::chrono::steady_clock::now().time_since_epoch().count(), std::memory_order_relaxed);
 
 		EXP_OVER* send_over = new EXP_OVER(std::move(sending_data));
 		DWORD send_bytes;
@@ -1398,7 +1441,7 @@ public:
 
 		event_type ev;
 		ev.obj_id = id_;
-		ev.wakeup_time = std::chrono::system_clock::now() + std::chrono::milliseconds(MOVE_COOL_TIME);
+		ev.wakeup_time = std::chrono::system_clock::now() + std::chrono::milliseconds(MOVE_COOL_TIME + rand() % MOVE_COOL_TIME_VARIATION);
 		ev.event_id = EVENT_MOVE;
 		ev.target_id = -1;
 		timer_queue.push(ev);
@@ -2995,6 +3038,33 @@ void npc_initialize()
 	std::cout << "[Server] NPC 초기화 완료: "
 	          << spawn_entries.size() << "마리" << std::endl;
 }
+void send_timer_thread()
+{
+	using namespace std::chrono;
+	std::priority_queue<event_type, std::vector<event_type>> local_queue;
+
+	while (true)
+	{
+		event_type ev;
+		while (send_timer_queue.try_pop(ev))
+		{
+			local_queue.push(ev);
+		}
+
+		if (!local_queue.empty() && system_clock::now() >= local_queue.top().wakeup_time)
+		{
+			EXP_OVER* flush_over = new EXP_OVER;
+			flush_over->type = io_type::send_flush;
+			PostQueuedCompletionStatus(h_iocp, -1, local_queue.top().obj_id, &flush_over->over);
+			local_queue.pop();
+		}
+		else
+		{
+			std::this_thread::sleep_for(milliseconds(1));
+		}
+	}
+}
+
 void timer_thread()
 {
 	using namespace std::chrono;
@@ -3205,7 +3275,14 @@ void worker_thread()
 		{
 			delete o;
 			std::shared_ptr<SESSION> cl = clients[id].load();
-			if (cl) cl->flush_send();
+			if (cl) cl->is_sending = false; // 다음 전송은 do_send나 타이머에 맡긴다
+			break;
+		}
+		case io_type::send_flush:
+		{
+			delete o;
+			std::shared_ptr<SESSION> cl = clients[id].load();
+			if (cl) cl->on_send_flush_timer();
 			break;
 		}
 		case io_type::npc_move:
@@ -3257,7 +3334,7 @@ void worker_thread()
 			{
 				event_type ev;
 				ev.obj_id = id;
-				ev.wakeup_time = std::chrono::system_clock::now() + std::chrono::milliseconds(delay_ms);
+				ev.wakeup_time = std::chrono::system_clock::now() + std::chrono::milliseconds(delay_ms + rand() % MOVE_COOL_TIME_VARIATION);
 				ev.event_id = EVENT_MOVE;
 				ev.target_id = -1;
 				timer_queue.push(ev);
@@ -3756,6 +3833,8 @@ int main()
 #if EXP_METRICS
 	std::thread(report_experiment_metrics).detach();
 #endif
+
+	std::thread(send_timer_thread).detach();
 
 	std::vector<std::thread> worker_threads;
 	for (unsigned int i = 0; i < std::thread::hardware_concurrency(); ++i)
