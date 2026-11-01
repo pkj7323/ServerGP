@@ -8,6 +8,8 @@ param(
     [int]$Seed = 1,
     [int]$ConnectMs = 30,
     [int]$DbRate = 0,
+    [int]$Adaptive = 0,
+    [int]$StopGain = 0,
     [string]$Exe = '',
     [string]$OutDir = ''
 )
@@ -28,6 +30,8 @@ $env:EXP_DURATION = $Seconds
 $env:EXP_SEED = $Seed
 $env:EXP_CONNECT_MS = $ConnectMs
 $env:EXP_DB_RATE = $DbRate
+$env:EXP_ADAPTIVE = $Adaptive
+$env:EXP_STOP_GAIN = $StopGain
 $env:EXP_BOT_CSV = Join-Path $OutDir "bot_$Tag.csv"
 
 $p = Start-Process (Resolve-Path $Exe) -PassThru

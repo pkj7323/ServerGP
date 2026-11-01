@@ -87,6 +87,8 @@ struct ExpBotConfig {
 	int db_rate = 0;        // EXP_DB_RATE: 초당 로그인 수 (DBSIM_ 계정)
 	int db_users = 1000;    // EXP_DB_USERS: 시드해 둔 DBSIM_ 계정 수
 	int db_hold_ms = 1000;  // EXP_DB_HOLD_MS: 로그인 후 유지 시간
+	int adaptive = 0;       // EXP_ADAPTIVE: 1이면 기존 자동 조절로 접속 수를 정한다 (EXP_BOTS는 상한)
+	int stop_gain = 0;      // EXP_STOP_GAIN: 60초 동안 늘어난 접속이 이 값 미만이면 종료 (0: 끔)
 	string csv = "bot_metrics.csv"; // EXP_BOT_CSV
 } g_exp;
 
@@ -460,7 +462,7 @@ static bool Connect_Slot(int slot, const char* user_id)
 
 void Adjust_Number_Of_Client()
 {
-	if (g_exp.bots > 0) {
+	if (g_exp.bots > 0 && !g_exp.adaptive) {
 		if (num_connections >= g_exp.bots) return;
 		auto since_last = high_resolution_clock::now() - last_connect_time;
 		if (g_exp.connect_ms > duration_cast<milliseconds>(since_last).count()) return;
@@ -468,6 +470,7 @@ void Adjust_Number_Of_Client()
 	else if (!Should_Connect_Adaptive()) {
 		return;
 	}
+	if (g_exp.adaptive && num_connections >= g_exp.bots) return;
 	last_connect_time = high_resolution_clock::now();
 
 	char user_id[32];
@@ -483,7 +486,7 @@ void Test_Thread()
 	while (true) {
 		//Sleep(max(20, global_delay));
 		if (g_exp.bots > 0) Sleep(1); // 고정 인원 측정 때는 봇이 코어 하나를 다 먹지 않게 한다
-		Adjust_Number_Of_Client();
+		else Adjust_Number_Of_Client();
 
 		for (int i = 0; i < num_connections; ++i) {
 			if (false == g_clients[i].connected) continue;
@@ -505,6 +508,16 @@ void Test_Thread()
 			SendPacket(i, &my_packet);
 			g_moves_sent.fetch_add(1, memory_order_relaxed);
 		}
+	}
+}
+
+// 측정 모드: WSAConnect가 이동 전송을 막지 않도록 접속을 따로 돌린다.
+void Connect_Thread()
+{
+	// 자동 조절은 상한에 닿은 뒤에도 RTT가 나빠지면 접속을 끊어야 하므로 계속 돈다.
+	while (g_exp.adaptive || num_connections < g_exp.bots) {
+		Sleep(1);
+		Adjust_Number_Of_Client();
 	}
 }
 
@@ -546,6 +559,18 @@ void DB_Churn_Thread()
 	}
 }
 
+// 최대 동접 측정: 접속이 더 늘지 않으면 끝낸다.
+static bool Exp_Should_Stop(int active)
+{
+	static deque<int> active_window;
+
+	active_window.push_back(active);
+	if (active_window.size() > 61) active_window.pop_front();
+
+	return g_exp.stop_gain > 0 && active_window.size() == 61
+		&& active_window.back() - active_window.front() < g_exp.stop_gain;
+}
+
 void Exp_Report_Thread()
 {
 	ofstream csv(g_exp.csv);
@@ -560,6 +585,7 @@ void Exp_Report_Thread()
 			<< g_recv_bytes.exchange(0) << ',' << g_login_ok.exchange(0) << ',' << g_login_fail.exchange(0) << ','
 			<< g_login_timeout.exchange(0) << ',' << login.p50 << ',' << login.p99 << endl;
 		if (g_exp.duration_s > 0 && sec >= g_exp.duration_s) ExitProcess(0);
+		if (Exp_Should_Stop(active_clients.load())) ExitProcess(0);
 	}
 }
 
@@ -572,6 +598,8 @@ void InitializeNetwork()
 	g_exp.db_rate = Exp_Env_Int("EXP_DB_RATE", 0);
 	g_exp.db_users = Exp_Env_Int("EXP_DB_USERS", g_exp.db_users);
 	g_exp.db_hold_ms = Exp_Env_Int("EXP_DB_HOLD_MS", g_exp.db_hold_ms);
+	g_exp.adaptive = Exp_Env_Int("EXP_ADAPTIVE", 0);
+	g_exp.stop_gain = Exp_Env_Int("EXP_STOP_GAIN", 0);
 	char csv_path[MAX_PATH];
 	if (GetEnvironmentVariableA("EXP_BOT_CSV", csv_path, MAX_PATH) > 0) g_exp.csv = csv_path;
 
@@ -595,6 +623,7 @@ void InitializeNetwork()
 	test_thread = thread{ Test_Thread };
 	if (g_exp.bots > 0) {
 		thread{ Exp_Report_Thread }.detach();
+		thread{ Connect_Thread }.detach();
 		if (g_exp.db_rate > 0) thread{ DB_Churn_Thread }.detach();
 	}
 }

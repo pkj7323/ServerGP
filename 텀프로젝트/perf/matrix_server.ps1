@@ -7,6 +7,7 @@ param(
     [string[]]$Reps = @('1'),
     [int]$MaxWaitBotSeconds = 600,
     [int]$MaxRunSeconds = 900,
+    [int]$CooldownSeconds = 10,
     [string]$OutDir = ''
 )
 
@@ -40,8 +41,12 @@ foreach ($mode in $Modes) {
 
             $deadline = (Get-Date).AddSeconds($MaxRunSeconds)
             $empty = 0
+            $peak = 0
+            # 봇이 끝나도 서버 쪽에 연결이 조금 남을 수 있으므로, 최고치의 1% 이하로 떨어지면 끝난 것으로 본다.
             while ($started -and (Get-Date) -lt $deadline -and -not $server.HasExited -and $empty -lt 3) {
-                if ((Get-BotCount) -eq 0) { $empty++ } else { $empty = 0 }
+                $count = Get-BotCount
+                if ($count -gt $peak) { $peak = $count }
+                if ($count -le $peak * 0.01) { $empty++ } else { $empty = 0 }
                 Start-Sleep -Seconds 1
             }
 
@@ -53,7 +58,8 @@ foreach ($mode in $Modes) {
                 elseif ($empty -lt 3) { "$(Get-Date -Format HH:mm:ss) TIMEOUT $tag" }
                 else { "$(Get-Date -Format HH:mm:ss) ok $tag" }
             }
-            Start-Sleep -Seconds 10 # 봇 PC가 포트가 닫힌 것을 보고 다음 조건으로 넘어갈 시간을 준다
+            # 봇 PC가 포트가 닫힌 것을 보고 다음 조건으로 넘어갈 시간을 준다. 인원이 많으면 TIME_WAIT 포트가 풀릴 때까지 늘린다.
+            Start-Sleep -Seconds $CooldownSeconds
         }
     }
 }

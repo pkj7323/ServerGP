@@ -4,7 +4,7 @@ $dir = "$PSScriptRoot\bot_package"
 New-Item -ItemType Directory -Force $dir | Out-Null
 
 Copy-Item (Join-Path $root 'STRESS_TEST\x64\exp\bot\STRESS_TEST.exe') $dir -Force
-Copy-Item "$PSScriptRoot\run_bot.ps1", "$PSScriptRoot\matrix_bot.ps1" $dir -Force
+Copy-Item "$PSScriptRoot\run_bot.ps1", "$PSScriptRoot\matrix_bot.ps1", "$PSScriptRoot\bot_run.py", "$PSScriptRoot\net_watch.py" $dir -Force
 foreach ($dll in 'msvcp140.dll', 'vcruntime140.dll', 'vcruntime140_1.dll') {
     Copy-Item "$env:SystemRoot\System32\$dll" $dir -Force
 }

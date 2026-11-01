@@ -9,6 +9,8 @@ param(
     [int]$StableSeconds = 180,
     [int]$InitSeconds = 20,
     [int]$DbRate = 0,
+    [int]$Adaptive = 0,
+    [int]$StopGain = 0,
     [string]$OutDir = ''
 )
 
@@ -38,7 +40,7 @@ foreach ($mode in $Modes) {
 
             # 봇 접속 속도가 초당 65명 정도이므로 접속 시간을 더한다. 끝부분 10초는 집계에서 뺀다.
             $seconds = [int]($bots / 60) + $WarmupSeconds + $StableSeconds + 10
-            & "$PSScriptRoot\run_bot.ps1" -Server $Server -Bots $bots -Tag $tag -Seconds $seconds -ConnectMs 1 -DbRate $DbRate -OutDir $OutDir
+            & "$PSScriptRoot\run_bot.ps1" -Server $Server -Bots $bots -Tag $tag -Seconds $seconds -ConnectMs 1 -DbRate $DbRate -Adaptive $Adaptive -StopGain $StopGain -OutDir $OutDir
 
             # 서버 PC가 이 서버를 내릴 때까지 기다려야 다음 조건이 이전 서버에 붙지 않는다.
             while (Test-Port) { Start-Sleep -Seconds 1 }
