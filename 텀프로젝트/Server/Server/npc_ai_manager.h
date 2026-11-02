@@ -100,6 +100,37 @@ public:
 #endif
 	}
 
+	// ── NPC 생성 시 호출: EXP_LUA_MODE 1에서 NPC 전용 VM을 미리 만든다 ───────
+	static void init_npc_slot(int npc_type, int npc_id, NpcLuaSlot& slot) {
+#if EXP_LUA_MODE == 1
+		slot.state = create_npc_state(npc_type, npc_id);
+#endif
+	}
+
+#if EXP_LUA_MODE == 1
+	// VM의 self 테이블에 있는 NPC 멤버를 락을 잡고 읽고 쓴다.
+	static int get_member(NpcLuaSlot& slot, const char* key) {
+		std::lock_guard<std::mutex> lock(slot.mtx);
+		lua_State* L = slot.state;
+		if (!L) return 0;
+		lua_getglobal(L, "self");
+		lua_getfield(L, -1, key);
+		int value = static_cast<int>(lua_tointeger(L, -1));
+		lua_pop(L, 2);
+		return value;
+	}
+
+	static void set_member(NpcLuaSlot& slot, const char* key, int value) {
+		std::lock_guard<std::mutex> lock(slot.mtx);
+		lua_State* L = slot.state;
+		if (!L) return;
+		lua_getglobal(L, "self");
+		lua_pushinteger(L, value);
+		lua_setfield(L, -2, key);
+		lua_pop(L, 1);
+	}
+#endif
+
 	// ── on_timer 호출 (EVENT_MOVE 타이머 만료 시) ────────────────────────────
 	static NpcAction call_on_timer(int npc_type, const NpcAiContext& ctx, NpcLuaSlot& slot) {
 		return run_hook(npc_type, "on_timer", ctx, -1, 0, slot);
@@ -131,6 +162,27 @@ private:
 		return L;
 	}
 
+#if EXP_LUA_MODE == 1
+	// NPC 하나가 쓰는 VM. 멤버를 담는 self 테이블을 두고, 스크립트의 ctx로 이 테이블을 넘긴다.
+	static lua_State* create_npc_state(int npc_type, int npc_id) {
+		auto it = script_paths().find(npc_type);
+		lua_State* L = nullptr;
+		if (it != script_paths().end()) {
+			L = create_state(npc_type, it->second);
+		} else {
+			// 상인은 스크립트가 없어도 멤버는 VM에 둔다.
+			L = luaL_newstate();
+			EXP_ADD(lua_states, 1);
+		}
+		if (!L) return nullptr;
+		lua_newtable(L);
+		lua_pushinteger(L, npc_id);
+		lua_setfield(L, -2, "self_id");
+		lua_setglobal(L, "self");
+		return L;
+	}
+#endif
+
 	// 동시성 모델에 맞는 lua_State를 골라 훅을 호출한다.
 	static NpcAction run_hook(int npc_type, const char* func_name, const NpcAiContext& ctx,
 	                          int extra_id, int extra_int, NpcLuaSlot& slot)
@@ -138,13 +190,9 @@ private:
 		EXP_ADD(lua_calls, 1);
 		auto exp_start = EXP_NOW();
 #if EXP_LUA_MODE == 1
-		// Locking: NPC별 VM을 첫 호출 때 만들고 mutex로 보호
+		// Locking: NPC별 VM을 mutex로 보호한다. 멤버는 VM의 self 테이블에 있다.
 		std::lock_guard<std::mutex> lock(slot.mtx);
 		EXP_ADD_ELAPSED_NS(lua_wait_ns, exp_start);
-		if (!slot.state) {
-			auto it = script_paths().find(npc_type);
-			if (it != script_paths().end()) slot.state = create_state(npc_type, it->second);
-		}
 		lua_State* L = slot.state;
 #elif EXP_LUA_MODE == 2
 		// Locking: 타입별 VM을 전체 NPC가 공유하고 전역 락 하나로 보호
@@ -193,19 +241,24 @@ private:
 		}
 
 		// ctx 테이블 push
-		lua_newtable(L);
 		auto seti = [&](const char* key, int val) {
 			lua_pushinteger(L, val);
 			lua_setfield(L, -2, key);
 		};
+#if EXP_LUA_MODE == 1
+		// 멤버는 이미 self에 있으므로 주변 정보만 채운다.
+		lua_getglobal(L, "self");
+#else
+		lua_newtable(L);
 		seti("self_id",       ctx.self_id);
-		seti("self_x",        ctx.self_x);
-		seti("self_y",        ctx.self_y);
 		seti("self_hp",       ctx.self_hp);
 		seti("self_max_hp",   ctx.self_max_hp);
 		seti("initial_x",     ctx.initial_x);
 		seti("initial_y",     ctx.initial_y);
 		seti("current_state", ctx.current_state);
+#endif
+		seti("self_x",        ctx.self_x);
+		seti("self_y",        ctx.self_y);
 		seti("target_id",     ctx.target_id);
 		seti("target_x",      ctx.target_x);
 		seti("target_y",      ctx.target_y);

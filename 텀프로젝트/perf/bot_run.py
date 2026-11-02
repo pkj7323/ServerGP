@@ -35,6 +35,7 @@ def main():
     ap.add_argument('--reps', default='12')
     ap.add_argument('--warmup', type=int, default=120)
     ap.add_argument('--stable', type=int, default=180)
+    ap.add_argument('--init', type=int, default=20, help='포트가 열린 뒤 NPC 초기화를 기다리는 초')
     ap.add_argument('--adaptive', action='store_true', help='기존 자동 조절로 접속 수를 정한다. --counts는 상한')
     ap.add_argument('--stop-gain', type=int, default=0, help='60초 동안 늘어난 접속이 이 값 미만이면 조건 종료')
     args = ap.parse_args()
@@ -62,7 +63,7 @@ def main():
                               os.path.join(HERE, 'matrix_bot.ps1'),
                               '-Server', args.server, '-Modes', args.modes, '-Counts', args.counts,
                               '-Reps', args.reps, '-WarmupSeconds', str(args.warmup),
-                              '-StableSeconds', str(args.stable),
+                              '-StableSeconds', str(args.stable), '-InitSeconds', str(args.init),
                               '-Adaptive', str(int(args.adaptive)), '-StopGain', str(args.stop_gain)])
     finally:
         for proc in (net, cpu):

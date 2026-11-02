@@ -23,9 +23,12 @@ function Get-BotCount {
     @(Get-NetTCPConnection -LocalPort 3900 -State Established -ErrorAction SilentlyContinue).Count
 }
 
-foreach ($mode in $Modes) {
+for ($i = 0; $i -lt $Reps.Count; $i++) {
+    $rep = $Reps[$i]
+    # 회차마다 조건 순서를 뒤집어 시간대 영향이 한 조건에 몰리지 않게 한다. matrix_bot.ps1과 순서가 같아야 한다.
+    $order = if ($i % 2) { $Modes[($Modes.Count - 1)..0] } else { $Modes }
     foreach ($bots in $Counts) {
-        foreach ($rep in $Reps) {
+        foreach ($mode in $order) {
             $tag = "${mode}_n${bots}_r$rep"
             $env:EXP_SERVER_CSV = Join-Path $OutDir "server_$tag.csv"
             $env:EXP_DB_CONN = 'DRIVER={ODBC Driver 18 for SQL Server};SERVER=DESKTOP-PARK\SQLEXPRESS01;DATABASE=2021180009_SGP_Bench;Trusted_Connection=Yes;TrustServerCertificate=Yes;'

@@ -19,7 +19,7 @@
 #define EXP_SEND_PER_PACKET 0 // 1: 패킷마다 WSASend (묶음 전송 끄기)
 #endif
 #ifndef EXP_LUA_MODE
-#define EXP_LUA_MODE 0        // 0: thread_local 풀, 1: NPC별 state+mutex, 2: 타입별 state+전역 락
+#define EXP_LUA_MODE 0        // 0: thread_local 풀, 1: NPC별 VM+mutex (NPC 멤버를 VM에 저장), 2: 타입별 state+전역 락
 #endif
 #ifndef EXP_DB_SYNC
 #define EXP_DB_SYNC 0         // 1: DB 작업을 워커 스레드에서 동기 실행 (스레드별 ODBC 연결)

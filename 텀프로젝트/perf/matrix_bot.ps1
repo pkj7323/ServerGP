@@ -30,9 +30,12 @@ function Test-Port {
     finally { $client.Close() }
 }
 
-foreach ($mode in $Modes) {
+for ($i = 0; $i -lt $Reps.Count; $i++) {
+    $rep = $Reps[$i]
+    # 회차마다 조건 순서를 뒤집는다. matrix_server.ps1과 순서가 같아야 한다.
+    $order = if ($i % 2) { $Modes[($Modes.Count - 1)..0] } else { $Modes }
     foreach ($bots in $Counts) {
-        foreach ($rep in $Reps) {
+        foreach ($mode in $order) {
             $tag = "${mode}_n${bots}_r$rep"
             "$(Get-Date -Format HH:mm:ss) wait server for $tag"
             while (-not (Test-Port)) { Start-Sleep -Seconds 1 }
@@ -43,7 +46,12 @@ foreach ($mode in $Modes) {
             & "$PSScriptRoot\run_bot.ps1" -Server $Server -Bots $bots -Tag $tag -Seconds $seconds -ConnectMs 1 -DbRate $DbRate -Adaptive $Adaptive -StopGain $StopGain -OutDir $OutDir
 
             # 서버 PC가 이 서버를 내릴 때까지 기다려야 다음 조건이 이전 서버에 붙지 않는다.
-            while (Test-Port) { Start-Sleep -Seconds 1 }
+            # 접속이 한꺼번에 끊길 때는 살아 있는 서버도 응답을 놓치므로, 연속으로 실패해야 내려간 것으로 본다.
+            $closed = 0
+            while ($closed -lt 10) {
+                if (Test-Port) { $closed = 0 } else { $closed++ }
+                Start-Sleep -Seconds 1
+            }
         }
     }
 }

@@ -1011,22 +1011,50 @@ public:
 	// [SpawnMap] 스폰 데이터에서 로드되는 NPC 고유 정보
 	NpcType            _npcType  = NPC_NONE;
 	int                _visualId = 0;
-	int                _hp       = 0;
-	int                _maxHp    = 0;
 	unsigned char      _level    = 1;
 	unsigned long long _exp      = 0;
 	int                _attack   = 0;
 	int                _dropItem = 0;
 	int                _dropGold = 0;
+#if EXP_LUA_MODE == 1
+	// Locking Lua: 체력, AI 상태, 어그로, 스폰 위치는 NPC의 VM에 있고 접근할 때마다 락을 잡는다.
+	int  hp()                      { return NpcAiManager::get_member(lua_slot_, "self_hp"); }
+	void set_hp(int v)             { NpcAiManager::set_member(lua_slot_, "self_hp", v); }
+	int  max_hp()                  { return NpcAiManager::get_member(lua_slot_, "self_max_hp"); }
+	void set_max_hp(int v)         { NpcAiManager::set_member(lua_slot_, "self_max_hp", v); }
+	NpcState ai_state()            { return static_cast<NpcState>(NpcAiManager::get_member(lua_slot_, "current_state")); }
+	void set_ai_state(NpcState v)  { NpcAiManager::set_member(lua_slot_, "current_state", static_cast<int>(v)); }
+	int  aggro_target()            { return NpcAiManager::get_member(lua_slot_, "aggro_target"); }
+	void set_aggro_target(int v)   { NpcAiManager::set_member(lua_slot_, "aggro_target", v); }
+	int  initial_x()               { return NpcAiManager::get_member(lua_slot_, "initial_x"); }
+	void set_initial_x(int v)      { NpcAiManager::set_member(lua_slot_, "initial_x", v); }
+	int  initial_y()               { return NpcAiManager::get_member(lua_slot_, "initial_y"); }
+	void set_initial_y(int v)      { NpcAiManager::set_member(lua_slot_, "initial_y", v); }
+#else
+	int      _hp         = 0;
+	int      _maxHp      = 0;
 	// AI 상태
-	NpcState _aiState   = NpcState::IDLE;
+	NpcState _aiState    = NpcState::IDLE;
 	int      _aggroTarget = -1;  // 어그로 중인 플레이어 ID
+	int16_t  initial_x_  = 0;
+	int16_t  initial_y_  = 0;
+	int  hp() const                { return _hp; }
+	void set_hp(int v)             { _hp = v; }
+	int  max_hp() const            { return _maxHp; }
+	void set_max_hp(int v)         { _maxHp = v; }
+	NpcState ai_state() const      { return _aiState; }
+	void set_ai_state(NpcState v)  { _aiState = v; }
+	int  aggro_target() const      { return _aggroTarget; }
+	void set_aggro_target(int v)   { _aggroTarget = v; }
+	int  initial_x() const         { return initial_x_; }
+	void set_initial_x(int v)      { initial_x_ = static_cast<int16_t>(v); }
+	int  initial_y() const         { return initial_y_; }
+	void set_initial_y(int v)      { initial_y_ = static_cast<int16_t>(v); }
+#endif
 public:
 	NPC() : BaseObject(), last_move_timestamp_(std::chrono::system_clock::now()), last_hit_time_(std::chrono::system_clock::now()) {}
 	std::chrono::time_point<std::chrono::system_clock> last_move_timestamp_; // NPC의 마지막 이동 시간 기록
 	std::chrono::time_point<std::chrono::system_clock> last_hit_time_;       // 마지막 피격 시간
-	int16_t initial_x_ = 0;
-	int16_t initial_y_ = 0;
 	void heartbeat()
 	{
 		do_ai();
@@ -1034,16 +1062,15 @@ public:
 	int do_timer_move()
 	{
 		auto now = std::chrono::system_clock::now();
-		if (_hp < _maxHp && std::chrono::duration_cast<std::chrono::seconds>(now - last_hit_time_).count() >= 5) {
-			_hp += _maxHp / 10;
-			_hp = std::min(_hp, _maxHp);
+		if (hp() < max_hp() && std::chrono::duration_cast<std::chrono::seconds>(now - last_hit_time_).count() >= 5) {
+			set_hp(std::min(hp() + max_hp() / 10, max_hp()));
 
 			S2C_StatusChange stat;
 			stat.size       = sizeof(stat);
 			stat.type       = S2C_STATUS_CHANGE;
 			stat.object_id  = id_;
-			stat.hp         = _hp;
-			stat.max_hp     = _maxHp;
+			stat.hp         = hp();
+			stat.max_hp     = max_hp();
 			stat.exp        = _exp;
 			stat.level      = _level;
 			stat.head_tier = 0;
@@ -1092,14 +1119,14 @@ public:
 
 	// ── NpcState 변경 브로드캐스트 ────────────────────────────────────────
 	void broadcast_state_change(NpcState new_state) {
-		if (_aiState == new_state) return;
-		_aiState = new_state;
+		if (ai_state() == new_state) return;
+		set_ai_state(new_state);
 		S2C_NpcStateChange pkt;
 		pkt.size      = sizeof(pkt);
 		pkt.type      = S2C_NPC_STATE_CHANGE;
 		pkt.object_id = id_;
 		pkt.npc_state = static_cast<char>(new_state);
-		pkt.target_id = _aggroTarget;
+		pkt.target_id = aggro_target();
 		for (auto pid : sector.get_objects_nearby_sector(x_, y_)) {
 			if (is_npc_id(pid)) continue;
 			std::shared_ptr<SESSION> s = clients[pid].load();
@@ -1125,27 +1152,33 @@ public:
 
 		// 2. 어그로 타겟 갱신 (on_hit로 바뀌면 유지)
 		auto [nearest_id, nearest_dist] = find_nearest_player();
-		if (_aggroTarget == -1 || nearest_id == -1) _aggroTarget = nearest_id;
+		int aggro = aggro_target();
+		if (aggro == -1 || nearest_id == -1) {
+			aggro = nearest_id;
+			set_aggro_target(aggro);
+		}
 
 		// 3. Lua AI 컨텍스트 구성
 		NpcAiContext ctx;
 		ctx.self_id       = id_;
 		ctx.self_x        = x_;
 		ctx.self_y        = y_;
-		ctx.self_hp       = _hp;
-		ctx.self_max_hp   = _maxHp;
-		ctx.initial_x     = initial_x_;
-		ctx.initial_y     = initial_y_;
-		ctx.current_state = static_cast<int>(_aiState);
-		ctx.target_id     = _aggroTarget;
-		if (_aggroTarget != -1) {
-			std::shared_ptr<SESSION> s = clients[_aggroTarget].load();
+#if EXP_LUA_MODE != 1
+		ctx.self_hp       = hp();
+		ctx.self_max_hp   = max_hp();
+		ctx.initial_x     = initial_x();
+		ctx.initial_y     = initial_y();
+		ctx.current_state = static_cast<int>(ai_state());
+#endif
+		ctx.target_id     = aggro;
+		if (aggro != -1) {
+			std::shared_ptr<SESSION> s = clients[aggro].load();
 			if (s && s->player_) {
 				ctx.target_x = s->player_->x_;
 				ctx.target_y = s->player_->y_;
 				ctx.dist = std::abs(x_ - ctx.target_x) + std::abs(y_ - ctx.target_y);
 			} else {
-				_aggroTarget = nearest_id;
+				set_aggro_target(nearest_id);
 				ctx.target_id = nearest_id;
 				ctx.dist = nearest_dist;
 			}
@@ -1264,7 +1297,7 @@ public:
 				}
 			}
 			// 크리퍼 스스로 사망
-			_hp = 0;
+			set_hp(0);
 			break;
 		}
 		case NpcActionType::AOE_ATTACK: {
@@ -1334,9 +1367,9 @@ public:
 			break;
 		}
 		case NpcActionType::ZONE_DAMAGE: {
-			_hp--;
-			if (_hp <= 0) {
-				_aiState = NpcState::DEAD;
+			set_hp(hp() - 1);
+			if (hp() <= 0) {
+				set_ai_state(NpcState::DEAD);
 				break;
 			}
 			for (auto pid : old_vl) {
@@ -1354,7 +1387,7 @@ public:
 		}
 
 		// 채팅 이펀트 (보스/상인/퀘스트 NPC만)
-		if (!action.chat_msg.empty() && (_npcType == NPC_ENDER_DRAGON || _aiState == NpcState::MERCHANT || _visualId == 10)) {
+		if (!action.chat_msg.empty() && (_npcType == NPC_ENDER_DRAGON || ai_state() == NpcState::MERCHANT || _visualId == 10)) {
 			S2C_ChatMessage chat_pkt;
 			chat_pkt.type = S2C_CHAT_MESSAGE;
 			chat_pkt.object_id = id_;
@@ -1391,9 +1424,9 @@ public:
 					add_npc.visual_id = _visualId;
 					add_npc.x = x_;
 					add_npc.y = y_;
-					add_npc.hp = _hp;
-					add_npc.max_hp = _maxHp;
-					add_npc.npc_state = static_cast<char>(_aiState);
+					add_npc.hp = hp();
+					add_npc.max_hp = max_hp();
+					add_npc.npc_state = static_cast<char>(ai_state());
 					add_npc.is_burning = (fire_stacks_.load() > 0) ? 1 : 0;
 					s->do_send(add_npc.size, reinterpret_cast<char*>(&add_npc));
 				}
@@ -1437,7 +1470,7 @@ public:
 		}
 		EXP_ADD(active_npcs, 1);
 
-		if (_aiState == NpcState::MERCHANT) return; // Do not schedule AI ticks for merchants
+		if (ai_state() == NpcState::MERCHANT) return; // Do not schedule AI ticks for merchants
 
 		event_type ev;
 		ev.obj_id = id_;
@@ -1656,9 +1689,9 @@ bool SESSION::proccess_packet(unsigned char* buff)
 					add_npc.visual_id = npc->_visualId;
 					add_npc.x = npc->x_;
 					add_npc.y = npc->y_;
-					add_npc.hp = npc->_hp;
-					add_npc.max_hp = npc->_maxHp;
-					add_npc.npc_state = static_cast<char>(npc->_aiState);
+					add_npc.hp = npc->hp();
+					add_npc.max_hp = npc->max_hp();
+					add_npc.npc_state = static_cast<char>(npc->ai_state());
 					add_npc.is_burning = (npc->fire_stacks_.load() > 0) ? 1 : 0;
 					do_send(add_npc.size, reinterpret_cast<char*>(&add_npc));
 
@@ -1938,7 +1971,7 @@ bool SESSION::proccess_packet(unsigned char* buff)
 			if (is_npc_id(oid)) {
 				auto npc = npcs[oid].load();
 				if (!npc || !npc->is_active) continue;
-				if (npc->_aiState == NpcState::MERCHANT) continue; // Prevent hitting merchants
+				if (npc->ai_state() == NpcState::MERCHANT) continue; // Prevent hitting merchants
 				if (npc->_npcType == NPC_FIRE_ZONE) continue; // Prevent hitting fire zones
 				bool hit = false;
 				for (auto& cell : attack_cells) {
@@ -1957,7 +1990,7 @@ bool SESSION::proccess_packet(unsigned char* buff)
 				if (hit) {
 					npc->last_hit_time_ = std::chrono::system_clock::now();
 					int actual_damage = damage * 20; // 테스트를 위해 데미지 20배 뻥튀기!
-					npc->_hp -= actual_damage;
+					npc->set_hp(npc->hp() - (actual_damage));
 
 					// Skills
 					if (player_->_skills_mask & (1 << static_cast<int>(SkillType::LIFE_STEAL))) {
@@ -2007,8 +2040,8 @@ bool SESSION::proccess_packet(unsigned char* buff)
 					stat.size       = sizeof(stat);
 					stat.type       = S2C_STATUS_CHANGE;
 					stat.object_id  = oid;
-					stat.hp         = npc->_hp;
-					stat.max_hp     = npc->_maxHp;
+					stat.hp         = npc->hp();
+					stat.max_hp     = npc->max_hp();
 					stat.exp        = npc->_exp;
 					stat.level      = npc->_level;
 					stat.head_tier = 0;
@@ -2030,14 +2063,16 @@ bool SESSION::proccess_packet(unsigned char* buff)
 					hit_ctx.self_id   = oid;
 					hit_ctx.self_x    = npc->x_;
 					hit_ctx.self_y    = npc->y_;
-					hit_ctx.self_hp   = npc->_hp;
-					hit_ctx.self_max_hp = npc->_maxHp;
-					hit_ctx.current_state = static_cast<int>(npc->_aiState);
+#if EXP_LUA_MODE != 1
+					hit_ctx.self_hp   = npc->hp();
+					hit_ctx.self_max_hp = npc->max_hp();
+					hit_ctx.current_state = static_cast<int>(npc->ai_state());
+#endif
 					hit_ctx.target_id = id_;
 					NpcAction hit_action = NpcAiManager::call_on_hit(
 						static_cast<int>(npc->_npcType), hit_ctx, id_, actual_damage, npc->lua_slot_);
 					// 어그로 타겟 갱신
-					npc->_aggroTarget = id_;
+					npc->set_aggro_target(id_);
 					npc->broadcast_state_change(static_cast<NpcState>(hit_action.new_state));
 					// 잠든 NPC 깨우기
 					npc->wake_up();
@@ -2048,7 +2083,7 @@ bool SESSION::proccess_packet(unsigned char* buff)
 						chat_pkt.size = sizeof(chat_pkt);
 						chat_pkt.type = S2C_CHAT_MESSAGE;
 						chat_pkt.object_id = oid;
-						std::string msg = "앗! 체력: " + std::to_string(npc->_hp);
+						std::string msg = "앗! 체력: " + std::to_string(npc->hp());
 						strncpy_s(chat_pkt.message, msg.c_str(), sizeof(chat_pkt.message));
 					
 						do_send(chat_pkt.size, reinterpret_cast<char*>(&chat_pkt));
@@ -2060,7 +2095,7 @@ bool SESSION::proccess_packet(unsigned char* buff)
 						}
 					}*/
 
-					if (npc->_hp <= 0) {
+					if (npc->hp() <= 0) {
 						// Death
 						npc->set_inactive();
 						
@@ -2401,7 +2436,7 @@ bool SESSION::proccess_packet(unsigned char* buff)
 			if (is_npc_id(oid)) {
 				auto npc = npcs[oid].load();
 				if (!npc) continue;
-				if (npc->_aiState != NpcState::MERCHANT) continue;
+				if (npc->ai_state() != NpcState::MERCHANT) continue;
 
 				int dist = std::max(std::abs(npc->x_ - player_->x_), std::abs(npc->y_ - player_->y_));
 				if (dist <= 1 && dist < min_dist) {
@@ -2515,7 +2550,7 @@ bool SESSION::proccess_packet(unsigned char* buff)
 	{
 		C2S_TradeCommand* pkt = reinterpret_cast<C2S_TradeCommand*>(buff);
 		auto npc = npcs[pkt->npc_id].load();
-		if (!npc || npc->_aiState != NpcState::MERCHANT) break;
+		if (!npc || npc->ai_state() != NpcState::MERCHANT) break;
 
 		int dist = std::max(std::abs(npc->x_ - player_->x_), std::abs(npc->y_ - player_->y_));
 		if (dist > 5) break; // Too far
@@ -2756,9 +2791,9 @@ void SESSION::force_teleport(int tx, int ty) {
 				add_npc.visual_id = npc->_visualId;
 				add_npc.x = npc->x_;
 				add_npc.y = npc->y_;
-				add_npc.hp = npc->_hp;
-				add_npc.max_hp = npc->_maxHp;
-				add_npc.npc_state = static_cast<char>(npc->_aiState);
+				add_npc.hp = npc->hp();
+				add_npc.max_hp = npc->max_hp();
+				add_npc.npc_state = static_cast<char>(npc->ai_state());
 				add_npc.is_burning = (npc->fire_stacks_.load() > 0) ? 1 : 0;
 				do_send(add_npc.size, reinterpret_cast<char*>(&add_npc));
 				npc->wake_up();
@@ -2857,9 +2892,9 @@ void SESSION::send_already_spawn_players()
 					add_npc.visual_id = npc->_visualId;
 					add_npc.x = npc->x_;
 					add_npc.y = npc->y_;
-					add_npc.hp = npc->_hp;
-					add_npc.max_hp = npc->_maxHp;
-					add_npc.npc_state = static_cast<char>(npc->_aiState);
+					add_npc.hp = npc->hp();
+					add_npc.max_hp = npc->max_hp();
+					add_npc.npc_state = static_cast<char>(npc->ai_state());
 					add_npc.is_burning = (npc->fire_stacks_.load() > 0) ? 1 : 0;
 					do_send(add_npc.size, reinterpret_cast<char*>(&add_npc));
 
@@ -3009,25 +3044,26 @@ void npc_initialize()
 		const NpcMeta& m  = meta_table[entry.type_id];
 		int npc_id        = make_npc_id(npc_index++);
 		auto npc          = std::make_shared<NPC>();
+		NpcAiManager::init_npc_slot(entry.type_id, npc_id, npc->lua_slot_);
 
 		npc->id_       = npc_id;
 		npc->x_        = entry.x;
 		npc->y_        = entry.y;
-		npc->initial_x_= entry.x;
-		npc->initial_y_= entry.y;
+		npc->set_initial_x(entry.x);
+		npc->set_initial_y(entry.y);
 		npc->_npcType  = static_cast<NpcType>(entry.type_id);
 		npc->_visualId = m.visual_id;
-		npc->_hp       = m.hp;
-		npc->_maxHp    = m.max_hp;
+		npc->set_hp(m.hp);
+		npc->set_max_hp(m.max_hp);
 		npc->_level    = static_cast<unsigned char>(m.level);
 		npc->_exp      = m.exp;
 		npc->_attack   = m.attack;
 		npc->_dropItem = m.drop_item;
 		npc->_dropGold = m.drop_gold;
 		if (entry.type_id >= 6 && entry.type_id <= 10) {
-			npc->_aiState = NpcState::MERCHANT;
+			npc->set_ai_state(NpcState::MERCHANT);
 		} else {
-			npc->_aiState = NpcState::IDLE;
+			npc->set_ai_state(NpcState::IDLE);
 		}
 		strncpy_s(npc->userName_, m.name.c_str(), sizeof(npc->userName_) - 1);
 
@@ -3300,7 +3336,7 @@ void worker_thread()
 			int delay_ms = npc->do_timer_move();
 
 			// AI DIE 액션(크리퍼 자폭 등) 처리
-			if (npc->_hp <= 0) {
+			if (npc->hp() <= 0) {
 				npc->set_inactive();
 				// 주변 플레이어에게 제거 패킷 브로드캐스트
 				auto nearby = sector.get_objects_nearby_sector(npc->x_, npc->y_);
@@ -3356,9 +3392,9 @@ void worker_thread()
 			if (is_npc_id(id)) {
 				auto npc = npcs[id].load();
 				if (npc) {
-					npc->x_ = npc->initial_x_;
-					npc->y_ = npc->initial_y_;
-					npc->_hp = npc->_maxHp;
+					npc->x_ = npc->initial_x();
+					npc->y_ = npc->initial_y();
+					npc->set_hp(npc->max_hp());
 					sector.add_object(npc->id_, npc->x_, npc->y_);
 					npc->wake_up(); // 주변 플레이어 감지 및 이동 타이머 시작
 					
@@ -3370,9 +3406,9 @@ void worker_thread()
 					add_pkt.x = npc->x_;
 					add_pkt.y = npc->y_;
 					add_pkt.visual_id = npc->_visualId;
-					add_pkt.hp        = npc->_hp;
-					add_pkt.max_hp    = npc->_maxHp;
-					add_pkt.npc_state = static_cast<char>(npc->_aiState);
+					add_pkt.hp        = npc->hp();
+					add_pkt.max_hp    = npc->max_hp();
+					add_pkt.npc_state = static_cast<char>(npc->ai_state());
 					add_pkt.is_burning = (npc->fire_stacks_.load() > 0) ? 1 : 0;
 					
 					for (auto pid : sector.get_objects_nearby_sector(npc->x_, npc->y_)) {
@@ -3415,14 +3451,14 @@ void worker_thread()
 			if (npc && npc->is_active) {
 				npc->fire_stacks_--;
 				if (npc->fire_stacks_.load() < 0) npc->fire_stacks_ = 0;
-				npc->_hp -= ev.attack_power;
+				npc->set_hp(npc->hp() - (ev.attack_power));
 				
 				S2C_StatusChange stat;
 				stat.size       = sizeof(stat);
 				stat.type       = S2C_STATUS_CHANGE;
 				stat.object_id  = ev.obj_id;
-				stat.hp         = npc->_hp;
-				stat.max_hp     = npc->_maxHp;
+				stat.hp         = npc->hp();
+				stat.max_hp     = npc->max_hp();
 				stat.exp        = npc->_exp;
 				stat.level      = npc->_level;
 				stat.head_tier = 0;
@@ -3443,7 +3479,7 @@ void worker_thread()
 					}
 				}
 
-				if (npc->_hp <= 0) {
+				if (npc->hp() <= 0) {
 					npc->set_inactive();
 					
 					// Reward to attacker if possible
@@ -3570,9 +3606,9 @@ void worker_thread()
 							add_pkt.x = npc->x_;
 							add_pkt.y = npc->y_;
 							add_pkt.visual_id = npc->_visualId;
-							add_pkt.hp        = npc->_hp;
-							add_pkt.max_hp    = npc->_maxHp;
-							add_pkt.npc_state = static_cast<char>(npc->_aiState);
+							add_pkt.hp        = npc->hp();
+							add_pkt.max_hp    = npc->max_hp();
+							add_pkt.npc_state = static_cast<char>(npc->ai_state());
 							add_pkt.is_burning = (npc->fire_stacks_.load() > 0) ? 1 : 0;
 							s->do_send(add_pkt.size, reinterpret_cast<char*>(&add_pkt));
 
@@ -3676,12 +3712,13 @@ void worker_thread()
 				if (ev.proj_type == 1) { // Fireball 폭발 시 불 장판 생성
 					int fire_zone_id = make_npc_id(npc_index++);
 					auto npc = std::make_shared<NPC>();
+					NpcAiManager::init_npc_slot(NPC_FIRE_ZONE, fire_zone_id, npc->lua_slot_);
 					npc->id_ = fire_zone_id;
 					npc->x_ = cx;
 					npc->y_ = cy;
-					npc->_aiState = NpcState::IDLE;
-					npc->_hp = 3;
-					npc->_maxHp = 3;
+					npc->set_ai_state(NpcState::IDLE);
+					npc->set_hp(3);
+					npc->set_max_hp(3);
 					npc->_visualId = 12; // 12: NPC_FIRE_ZONE
 					npc->_npcType = NPC_FIRE_ZONE; // 12번 타입 (fire_zone_ai.lua 사용)
 					npc->_attack = std::max(1, ev.attack_power / 2); // 도트 딜
@@ -3799,12 +3836,6 @@ int main()
 		exit(-1);
 	}
 
-	if (listen(server_socket, SOMAXCONN) == SOCKET_ERROR) {
-		error_display(L"listen failed", WSAGetLastError());
-		system("pause");
-		exit(-1);
-	}
-
 	h_iocp = CreateIoCompletionPort(INVALID_HANDLE_VALUE, NULL, 0, 0);
 	CreateIoCompletionPort((HANDLE)server_socket, h_iocp, 0, 0);
 
@@ -3819,6 +3850,13 @@ int main()
 	std::cout << "NPC 초기화 중..." << std::endl;
 	npc_initialize();
 	std::cout << "NPC 초기화 완료. NPC Count: " << npcs.size() << std::endl;
+
+	// NPC를 다 만든 뒤에 포트를 연다. 봇은 포트가 열리면 바로 접속한다.
+	if (listen(server_socket, SOMAXCONN) == SOCKET_ERROR) {
+		error_display(L"listen failed", WSAGetLastError());
+		system("pause");
+		exit(-1);
+	}
 
 	EXP_OVER accept_over(io_type::accept);
 	accept_over.accept_socket = WSASocket(AF_INET, SOCK_STREAM, 0, NULL, 0, WSA_FLAG_OVERLAPPED);
